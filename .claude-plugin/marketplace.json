@@ -1,0 +1,12 @@
+{
+  "name": "ship-legal",
+  "description": "legal-check for Claude Code: audit a vibe-coded web app for common US (plus one EU) legal traps and fix what code can fix.",
+  "owner": { "name": "Shogo Kikuchi", "url": "https://github.com/Shogo-nfrealmusic" },
+  "plugins": [
+    {
+      "name": "legal-check",
+      "source": "./plugins/legal-check",
+      "description": "Audit a web app for COPPA, Google Fonts (GDPR), session replay (CIPA), CAN-SPAM, California auto-renewal, and DMCA traps, then fix what code can fix. Not legal advice."
+    }
+  ]
+}

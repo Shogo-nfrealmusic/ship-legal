@@ -1,0 +1,11 @@
+{
+  "name": "legal-check",
+  "displayName": "Legal Check",
+  "version": "0.1.0",
+  "description": "Audit a web app for COPPA, Google Fonts (GDPR), session replay (CIPA), CAN-SPAM, California auto-renewal, and DMCA traps, then fix what code can fix. Not legal advice.",
+  "author": { "name": "Shogo Kikuchi", "url": "https://github.com/Shogo-nfrealmusic" },
+  "homepage": "https://github.com/Shogo-nfrealmusic/ship-legal",
+  "repository": "https://github.com/Shogo-nfrealmusic/ship-legal",
+  "license": "MIT",
+  "keywords": ["legal", "compliance", "coppa", "gdpr", "can-spam", "dmca", "vibe-coding"]
+}

@@ -1,0 +1,698 @@
+diff --git a/.env.example b/.env.example
+index e0d9133..379ae05 100644
+--- a/.env.example
++++ b/.env.example
+@@ -5,3 +5,5 @@ STRIPE_SECRET_KEY=sk_test_xxx
+ STRIPE_PRICE_PRO=price_xxx
+ BLOB_READ_WRITE_TOKEN=vercel_blob_xxx
+ NEXT_PUBLIC_APP_URL=http://localhost:3000
++UNSUBSCRIBE_SECRET=long_random_string
++COMPANY_POSTAL_ADDRESS="TODO: your postal address"
+diff --git a/app/api/billing-portal/route.ts b/app/api/billing-portal/route.ts
+new file mode 100644
+index 0000000..648bfe1
+--- /dev/null
++++ b/app/api/billing-portal/route.ts
+@@ -0,0 +1,22 @@
++import { NextResponse } from "next/server";
++import Stripe from "stripe";
++import { currentUserId, db } from "@/lib/db";
++
++// POST /api/billing-portal — sends the user to the Stripe Customer Portal to manage or cancel.
++export async function POST() {
++  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
++  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
++
++  // TODO(legal-check): stripeCustomerId is never saved yet. Save session.customer from the
++  // checkout.session.completed webhook so this route can find it.
++  const user = db.findById(currentUserId());
++  if (!user?.stripeCustomerId) {
++    return NextResponse.json({ error: "No subscription found for this account." }, { status: 404 });
++  }
++
++  const session = await stripe.billingPortal.sessions.create({
++    customer: user.stripeCustomerId,
++    return_url: `${appUrl}/settings/profile`,
++  });
++  return NextResponse.redirect(session.url, 303);
++}
+diff --git a/app/api/checkout/route.ts b/app/api/checkout/route.ts
+index b6ae044..371cc7c 100644
+--- a/app/api/checkout/route.ts
++++ b/app/api/checkout/route.ts
+@@ -1,7 +1,12 @@
+ import { NextResponse } from "next/server";
+ import Stripe from "stripe";
+ 
+-export async function POST() {
++export async function POST(req: Request) {
++  const { agreedToRenewalTerms } = await req.json().catch(() => ({}));
++  if (agreedToRenewalTerms !== true) {
++    return NextResponse.json({ error: "Please agree to the automatic renewal terms." }, { status: 400 });
++  }
++
+   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+ 
+@@ -10,6 +15,13 @@ export async function POST() {
+     line_items: [{ price: process.env.STRIPE_PRICE_PRO, quantity: 1 }],
+     success_url: `${appUrl}/settings/profile?upgraded=1`,
+     cancel_url: `${appUrl}/pricing`,
++    // TODO(legal-check): keep this price in sync with STRIPE_PRICE_PRO in Stripe.
++    custom_text: {
++      submit: {
++        message:
++          "Your subscription renews automatically every month at $12 until you cancel. Cancel anytime in Settings → Profile.",
++      },
++    },
+   });
+ 
+   return NextResponse.json({ url: session.url });
+diff --git a/app/api/signup/route.ts b/app/api/signup/route.ts
+index ce15ba9..5698849 100644
+--- a/app/api/signup/route.ts
++++ b/app/api/signup/route.ts
+@@ -1,8 +1,30 @@
+ import { NextResponse } from "next/server";
++import { cookies } from "next/headers";
+ import { db, hashPassword } from "@/lib/db";
+ 
++const BLOCKED = "Sorry, we can't create an account for you right now.";
++
++function ageFrom(year: number, month: number) {
++  const now = new Date();
++  let age = now.getFullYear() - year;
++  if (now.getMonth() + 1 < month) age -= 1;
++  return age;
++}
++
+ export async function POST(req: Request) {
+-  const { name, handle, email, password } = await req.json();
++  const { name, handle, email, password, birthYear, birthMonth } = await req.json();
++
++  // Neutral age screen: runs before anything is stored. Birth date is never saved.
++  const jar = await cookies();
++  if (jar.get("signup_blocked")) {
++    return NextResponse.json({ error: BLOCKED }, { status: 403 });
++  }
++  const age = ageFrom(Number(birthYear), Number(birthMonth));
++  if (!Number.isFinite(age) || age < 13) {
++    jar.set("signup_blocked", "1", { httpOnly: true, sameSite: "lax", maxAge: 60 * 60 * 24 });
++    return NextResponse.json({ error: BLOCKED }, { status: 403 });
++  }
++
+   if (!email || !password || !handle) {
+     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+   }
+diff --git a/app/api/unsubscribe/route.ts b/app/api/unsubscribe/route.ts
+new file mode 100644
+index 0000000..757fbfe
+--- /dev/null
++++ b/app/api/unsubscribe/route.ts
+@@ -0,0 +1,29 @@
++import { NextResponse } from "next/server";
++import { db } from "@/lib/db";
++import { verifyUnsubscribeToken } from "@/lib/unsubscribe";
++
++function params(req: Request) {
++  const url = new URL(req.url);
++  return { email: url.searchParams.get("email") ?? "", token: url.searchParams.get("token") ?? "" };
++}
++
++const page = (body: string, status = 200) =>
++  new NextResponse(`<!doctype html><meta charset="utf-8"><title>Unsubscribe</title><main style="font-family:system-ui;max-width:480px;margin:48px auto">${body}</main>`, {
++    status,
++    headers: { "Content-Type": "text/html; charset=utf-8" },
++  });
++
++// GET only shows a confirm button: mail scanners open links automatically.
++export async function GET(req: Request) {
++  const { email, token } = params(req);
++  if (!email || !verifyUnsubscribeToken(email, token)) return page("<p>This unsubscribe link is invalid.</p>", 400);
++  return page(`<p>Unsubscribe from Vibely emails?</p><form method="post"><button type="submit">Unsubscribe</button></form>`);
++}
++
++// POST unsubscribes. Also serves one-click unsubscribe from mail apps (RFC 8058).
++export async function POST(req: Request) {
++  const { email, token } = params(req);
++  if (!email || !verifyUnsubscribeToken(email, token)) return page("<p>This unsubscribe link is invalid.</p>", 400);
++  db.unsubscribe(email);
++  return page("<p>You're unsubscribed. You won't get these emails anymore.</p>");
++}
+diff --git a/app/api/waitlist/launch/route.ts b/app/api/waitlist/launch/route.ts
+index 91cba45..4649cb3 100644
+--- a/app/api/waitlist/launch/route.ts
++++ b/app/api/waitlist/launch/route.ts
+@@ -1,23 +1,32 @@
+ import { NextResponse } from "next/server";
+ import { Resend } from "resend";
+ import { db } from "@/lib/db";
++import { appUrl as getAppUrl } from "@/lib/company";
++import { unsubscribeUrl } from "@/lib/unsubscribe";
+ import { launchAnnouncementEmail } from "@/emails/launch-announcement";
+ 
+ // POST /api/waitlist/launch  — sends the launch announcement to everyone on the waitlist.
+ export async function POST() {
+   const resend = new Resend(process.env.RESEND_API_KEY);
+-  const { subject, html } = launchAnnouncementEmail({
+-    appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+-  });
++  const appUrl = getAppUrl();
+ 
++  // waitlistEmails() already skips unsubscribed addresses.
+   const emails = db.waitlistEmails();
+   const { error } = await resend.batch.send(
+-    emails.map((to) => ({
+-      from: "Vibely <hello@vibely.app>",
+-      to,
+-      subject,
+-      html,
+-    })),
++    emails.map((to) => {
++      const unsubscribe = unsubscribeUrl(appUrl, to);
++      const { subject, html } = launchAnnouncementEmail({ appUrl, unsubscribeUrl: unsubscribe });
++      return {
++        from: "Vibely <hello@vibely.app>",
++        to,
++        subject,
++        html,
++        headers: {
++          "List-Unsubscribe": `<${unsubscribe}>`,
++          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
++        },
++      };
++    }),
+   );
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+   return NextResponse.json({ sent: emails.length });
+diff --git a/app/consent-banner.tsx b/app/consent-banner.tsx
+new file mode 100644
+index 0000000..6b195d0
+--- /dev/null
++++ b/app/consent-banner.tsx
+@@ -0,0 +1,36 @@
++"use client";
++
++import { useEffect, useState } from "react";
++
++export function ConsentBanner({ onAccept, onDecline }: { onAccept: () => void; onDecline: () => void }) {
++  const [choice, setChoice] = useState<string | null | undefined>(undefined);
++
++  useEffect(() => {
++    let saved: string | null = null;
++    try { saved = localStorage.getItem("consent"); } catch {}
++    setChoice(saved);
++    if (saved === "yes") onAccept();
++  }, [onAccept]);
++
++  if (choice !== null) return null; // undefined = not loaded yet; "yes"/"no" = decided
++
++  const decide = (v: "yes" | "no") => {
++    try { localStorage.setItem("consent", v); } catch {}
++    if (v === "yes") onAccept();
++    else onDecline();
++    setChoice(v);
++  };
++
++  return (
++    <div
++      role="dialog"
++      aria-label="Cookie consent"
++      style={{ position: "fixed", bottom: 16, left: 16, right: 16, padding: 16, background: "#fff", border: "1px solid #ddd", borderRadius: 12 }}
++    >
++      We use analytics and session recordings (typed text is masked) to improve Vibely.
++      See our <a href="/privacy">Privacy Policy</a>.{" "}
++      <button onClick={() => decide("yes")}>Accept</button>{" "}
++      <button onClick={() => decide("no")}>Decline</button>
++    </div>
++  );
++}
+diff --git a/app/dmca/page.tsx b/app/dmca/page.tsx
+new file mode 100644
+index 0000000..dd5154a
+--- /dev/null
++++ b/app/dmca/page.tsx
+@@ -0,0 +1,56 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++// TODO(legal-check): the agent details below must match your registration at dmca.copyright.gov.
++
++export const metadata = { title: "Copyright / DMCA — Vibely" };
++
++const AGENT = {
++  name: "TODO(legal-check): designated agent name",
++  address: "TODO(legal-check): designated agent postal address",
++  phone: "TODO(legal-check): designated agent phone",
++  email: "TODO(legal-check): designated agent email",
++};
++
++export default function DmcaPage() {
++  return (
++    <main>
++      <h1>Copyright / DMCA</h1>
++      <p>
++        Vibely respects copyright. If you believe content on Vibely (for example a profile
++        picture) infringes your copyright, send a notice to our designated agent.
++      </p>
++
++      <h2>Designated agent</h2>
++      <p>
++        {AGENT.name}<br />
++        {AGENT.address}<br />
++        Phone: {AGENT.phone}<br />
++        Email: <a href={`mailto:${AGENT.email}`}>{AGENT.email}</a>
++      </p>
++
++      <h2>What to include in a takedown notice</h2>
++      <ol>
++        <li>The copyrighted work you believe was infringed.</li>
++        <li>The URL of the material on Vibely you want removed.</li>
++        <li>Your name, postal address, phone number, and email.</li>
++        <li>A statement that you have a good-faith belief the use is not authorized by the
++          copyright owner, its agent, or the law.</li>
++        <li>A statement that the information in the notice is accurate and, under penalty of
++          perjury, that you are the owner or authorized to act for the owner.</li>
++        <li>Your physical or electronic signature.</li>
++      </ol>
++
++      <h2>Counter-notice</h2>
++      <p>
++        If your content was removed and you believe it was a mistake or misidentification,
++        you can send a counter-notice to the agent above with: the removed material and where
++        it appeared; a statement under penalty of perjury that you have a good-faith belief it
++        was removed by mistake or misidentification; your name, address, and phone number;
++        consent to the jurisdiction of the federal court for your address (or, if outside the
++        U.S., any judicial district where Vibely may be found); and your signature.
++      </p>
++
++      <h2>Repeat infringers</h2>
++      <p>We terminate, in appropriate circumstances, the accounts of users who repeatedly infringe.</p>
++    </main>
++  );
++}
+diff --git a/app/globals.css b/app/globals.css
+index 00d522a..4d36152 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -1,6 +1,6 @@
+ :root { --fg: #111; --bg: #fafafa; --accent: #7c3aed; }
+ * { box-sizing: border-box; }
+-body { margin: 0; font-family: "Inter", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
++body { margin: 0; font-family: var(--font-inter), system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+ main { max-width: 640px; margin: 0 auto; padding: 48px 20px; }
+ button, .btn { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 600; cursor: pointer; }
+ input { display: block; width: 100%; padding: 10px 12px; margin: 6px 0 16px; border: 1px solid #ddd; border-radius: 8px; }
+diff --git a/app/layout.tsx b/app/layout.tsx
+index 3bf1601..1aad875 100644
+--- a/app/layout.tsx
++++ b/app/layout.tsx
+@@ -1,7 +1,11 @@
+ import type { Metadata } from "next";
++import { Inter } from "next/font/google";
+ import { Providers } from "./providers";
+ import "./globals.css";
+ 
++// Self-hosted at build time, so visitors' browsers never contact Google.
++const inter = Inter({ subsets: ["latin"], weight: ["400", "600", "800"], display: "swap", variable: "--font-inter" });
++
+ export const metadata: Metadata = {
+   title: "Vibely — share your vibe",
+   description: "Post one vibe a day. See your friends' vibes.",
+@@ -9,17 +13,12 @@ export const metadata: Metadata = {
+ 
+ export default function RootLayout({ children }: { children: React.ReactNode }) {
+   return (
+-    <html lang="en">
+-      <head>
+-        <link rel="preconnect" href="https://fonts.googleapis.com" />
+-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+-        <link
+-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap"
+-          rel="stylesheet"
+-        />
+-      </head>
++    <html lang="en" className={inter.variable}>
+       <body>
+         <Providers>{children}</Providers>
++        <footer style={{ textAlign: "center", padding: "24px 20px" }}>
++          <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/dmca">Copyright / DMCA</a>
++        </footer>
+       </body>
+     </html>
+   );
+diff --git a/app/pricing/page.tsx b/app/pricing/page.tsx
+index f2b5a46..b20969d 100644
+--- a/app/pricing/page.tsx
++++ b/app/pricing/page.tsx
+@@ -1,8 +1,16 @@
+ "use client";
+ 
++import { useState } from "react";
++
+ export default function PricingPage() {
++  const [agreed, setAgreed] = useState(false);
++
+   async function subscribe() {
+-    const res = await fetch("/api/checkout", { method: "POST" });
++    const res = await fetch("/api/checkout", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ agreedToRenewalTerms: agreed }),
++    });
+     const { url } = await res.json();
+     window.location.href = url;
+   }
+@@ -16,7 +24,16 @@ export default function PricingPage() {
+         <li>Custom profile themes</li>
+         <li>See who viewed your vibe</li>
+       </ul>
+-      <button onClick={subscribe}>Go Pro</button>
++      {/* TODO(legal-check): keep this price in sync with STRIPE_PRICE_PRO in Stripe. */}
++      <p style={{ fontSize: 15 }}>
++        Vibely Pro is a subscription. You'll be charged $12 every month until you cancel.
++        Cancel anytime in Settings → Profile → Manage or cancel subscription.
++      </p>
++      <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
++        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ width: "auto", margin: 0 }} />
++        I agree to the automatic renewal terms above.
++      </label>
++      <button onClick={subscribe} disabled={!agreed}>Go Pro</button>
+     </main>
+   );
+ }
+diff --git a/app/privacy/page.tsx b/app/privacy/page.tsx
+new file mode 100644
+index 0000000..59da273
+--- /dev/null
++++ b/app/privacy/page.tsx
+@@ -0,0 +1,66 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++
++export const metadata = { title: "Privacy Policy — Vibely" };
++
++export default function PrivacyPage() {
++  return (
++    <main>
++      <h1>Privacy Policy</h1>
++      <p>Effective date: TODO(legal-check): date</p>
++      <p>
++        This policy explains what Vibely (operated by TODO(legal-check): company name and
++        address) collects and how it is used.
++      </p>
++
++      <h2>What we collect</h2>
++      <ul>
++        <li><b>Account:</b> name, username, email, and password (stored as a hash). At
++          sign-up we ask for your birth month and year to check your age; we don't store them.</li>
++        <li><b>Profile picture:</b> the image you upload. It is public and shown on your profile.</li>
++        <li><b>Waitlist:</b> your email if you joined the waitlist.</li>
++        <li><b>Payments:</b> if you subscribe to Vibely Pro, Stripe processes your payment.
++          We don't see or store your full card number.</li>
++        <li><b>Usage and session recordings:</b> only if you click "Accept" in the cookie
++          banner (see below).</li>
++      </ul>
++
++      <h2>Analytics and session recording</h2>
++      <p>
++        If you accept, we use PostHog to measure how Vibely is used and to record sessions
++        (clicks, scrolling, and page changes) so we can find where people get stuck. Text you
++        type into forms is masked and not recorded. If you click "Decline", PostHog doesn't
++        load. You can change your choice by clearing this site's storage in your browser.
++      </p>
++
++      <h2>Who receives data</h2>
++      <ul>
++        <li>PostHog: analytics and session recording (only with your consent).</li>
++        <li>Stripe: payments.</li>
++        <li>Resend: sending email.</li>
++        <li>Vercel Blob: storing profile pictures.</li>
++      </ul>
++      <p>We don't sell your personal information.</p>
++
++      <h2>Cookies and local storage</h2>
++      <p>
++        We store your consent choice in your browser. PostHog sets its own cookies only after
++        you accept. If sign-up is refused, a short-lived cookie (24 hours) prevents immediate
++        resubmission.
++      </p>
++
++      <h2>Email</h2>
++      <p>Every marketing email has an unsubscribe link. We stop sending them after you unsubscribe.</p>
++
++      <h2>Children</h2>
++      <p>Vibely is not directed to children under 13, and we don't knowingly collect their data.</p>
++
++      <h2>How long we keep data</h2>
++      <p>TODO(legal-check): retention periods.</p>
++
++      <h2>Your choices and contact</h2>
++      <p>
++        To access or delete your data, contact TODO(legal-check): privacy contact email.
++      </p>
++    </main>
++  );
++}
+diff --git a/app/providers.tsx b/app/providers.tsx
+index 579925e..1e28581 100644
+--- a/app/providers.tsx
++++ b/app/providers.tsx
+@@ -2,20 +2,14 @@
+ 
+ import posthog from "posthog-js";
+ import { PostHogProvider } from "posthog-js/react";
+-import { useEffect } from "react";
++import { acceptTracking, declineTracking } from "@/lib/analytics";
++import { ConsentBanner } from "./consent-banner";
+ 
+ export function Providers({ children }: { children: React.ReactNode }) {
+-  useEffect(() => {
+-    posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "", {
+-      api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
+-      person_profiles: "identified_only",
+-      // We want to see exactly where people get stuck in onboarding.
+-      disable_session_recording: false,
+-      session_recording: {
+-        maskAllInputs: false,
+-      },
+-    });
+-  }, []);
+-
+-  return <PostHogProvider client={posthog}>{children}</PostHogProvider>;
++  return (
++    <PostHogProvider client={posthog}>
++      {children}
++      <ConsentBanner onAccept={acceptTracking} onDecline={declineTracking} />
++    </PostHogProvider>
++  );
+ }
+diff --git a/app/settings/profile/page.tsx b/app/settings/profile/page.tsx
+index 0b6989f..3a46da6 100644
+--- a/app/settings/profile/page.tsx
++++ b/app/settings/profile/page.tsx
+@@ -23,7 +23,11 @@ export default function ProfileSettings() {
+         Profile picture
+         <input type="file" accept="image/*" onChange={onFile} />
+       </label>
+-      <p>Your picture is shown on your public profile.</p>
++      <p>Your picture is shown on your public profile. Only upload images you own or have the right to use.</p>
++      <h2>Subscription</h2>
++      <form method="post" action="/api/billing-portal">
++        <button type="submit">Manage or cancel subscription</button>
++      </form>
+     </main>
+   );
+ }
+diff --git a/app/signup/page.tsx b/app/signup/page.tsx
+index 892d456..cee5241 100644
+--- a/app/signup/page.tsx
++++ b/app/signup/page.tsx
+@@ -3,6 +3,9 @@
+ import { useState } from "react";
+ import { useRouter } from "next/navigation";
+ 
++const THIS_YEAR = new Date().getFullYear();
++const YEARS = Array.from({ length: 101 }, (_, i) => THIS_YEAR - i);
++
+ export default function SignupPage() {
+   const router = useRouter();
+   const [error, setError] = useState("");
+@@ -30,6 +33,18 @@ export default function SignupPage() {
+         <label>Username<input name="handle" required pattern="[a-z0-9_]{3,20}" /></label>
+         <label>Email<input name="email" type="email" required /></label>
+         <label>Password<input name="password" type="password" minLength={8} required /></label>
++        <label>Birth month
++          <select name="birthMonth" required defaultValue="">
++            <option value="" disabled>Month</option>
++            {Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
++          </select>
++        </label>
++        <label>Birth year
++          <select name="birthYear" required defaultValue="">
++            <option value="" disabled>Year</option>
++            {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
++          </select>
++        </label>
+         {error && <p style={{ color: "crimson" }}>{error}</p>}
+         <button type="submit">Sign up</button>
+       </form>
+diff --git a/app/terms/page.tsx b/app/terms/page.tsx
+new file mode 100644
+index 0000000..d4e6e2d
+--- /dev/null
++++ b/app/terms/page.tsx
+@@ -0,0 +1,45 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++
++export const metadata = { title: "Terms of Service — Vibely" };
++
++export default function TermsPage() {
++  return (
++    <main>
++      <h1>Terms of Service</h1>
++      <p>Effective date: TODO(legal-check): date</p>
++      <p>
++        These terms are an agreement between you and TODO(legal-check): company name. By using
++        Vibely, you agree to them.
++      </p>
++
++      <h2>Who can use Vibely</h2>
++      <p>You must be at least 13 years old to create an account.</p>
++
++      <h2>Your content</h2>
++      <p>
++        You're responsible for what you post, including your profile picture. Only upload
++        content you own or have the right to use. You keep ownership of your content and give
++        Vibely a license to host and display it to run the service. We may remove content that
++        breaks these terms or that we receive a valid copyright notice about. See our{" "}
++        <a href="/dmca">Copyright / DMCA</a> page.
++      </p>
++
++      <h2>Vibely Pro subscription</h2>
++      <p>
++        Vibely Pro renews automatically every month at the price shown on the pricing page
++        until you cancel. You can cancel online at any time in Settings → Profile → Manage or
++        cancel subscription. TODO(legal-check): what happens to the current period after
++        cancelling, and refund terms.
++      </p>
++
++      <h2>Disclaimers and limitation of liability</h2>
++      <p>TODO(legal-check): disclaimers and limitation of liability.</p>
++
++      <h2>Governing law</h2>
++      <p>TODO(legal-check): governing law and venue.</p>
++
++      <h2>Privacy</h2>
++      <p>See our <a href="/privacy">Privacy Policy</a>.</p>
++    </main>
++  );
++}
+diff --git a/emails/launch-announcement.ts b/emails/launch-announcement.ts
+index 5b98c18..f30e99d 100644
+--- a/emails/launch-announcement.ts
++++ b/emails/launch-announcement.ts
+@@ -1,4 +1,6 @@
+-export function launchAnnouncementEmail({ appUrl }: { appUrl: string }) {
++import { COMPANY_POSTAL_ADDRESS } from "@/lib/company";
++
++export function launchAnnouncementEmail({ appUrl, unsubscribeUrl }: { appUrl: string; unsubscribeUrl: string }) {
+   return {
+     subject: "Vibely is live — claim your username 🎉",
+     html: `
+@@ -9,6 +11,8 @@ export function launchAnnouncementEmail({ appUrl }: { appUrl: string }) {
+         for your first 3 months with code <b>EARLYVIBE</b>.</p>
+         <p><a href="${appUrl}/signup" style="background:#7c3aed;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;">Claim my username</a></p>
+         <p>See you inside,<br/>The Vibely team</p>
++        <p style="font-size:12px;color:#777">You're getting this because you joined the Vibely waitlist.
++        <a href="${unsubscribeUrl}">Unsubscribe</a> · ${COMPANY_POSTAL_ADDRESS}</p>
+       </div>
+     `,
+   };
+diff --git a/lib/analytics.ts b/lib/analytics.ts
+new file mode 100644
+index 0000000..6363a99
+--- /dev/null
++++ b/lib/analytics.ts
+@@ -0,0 +1,18 @@
++import posthog from "posthog-js";
++
++// PostHog (analytics + session recording) starts only after the visitor clicks Accept.
++// Inputs are masked by PostHog's default settings; do not turn that off.
++let started = false;
++
++export function acceptTracking() {
++  if (started) return;
++  started = true;
++  posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "", {
++    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
++    person_profiles: "identified_only",
++  });
++}
++
++export function declineTracking() {
++  if (started) posthog.opt_out_capturing();
++}
+diff --git a/lib/company.ts b/lib/company.ts
+new file mode 100644
+index 0000000..571d628
+--- /dev/null
++++ b/lib/company.ts
+@@ -0,0 +1,11 @@
++// TODO(legal-check): replace with your real postal address (street address, or a
++// registered P.O. box / private mailbox). CAN-SPAM requires a valid physical postal address.
++export const COMPANY_POSTAL_ADDRESS = process.env.COMPANY_POSTAL_ADDRESS ?? "TODO: your postal address";
++
++export function appUrl(): string {
++  const url = process.env.NEXT_PUBLIC_APP_URL;
++  if (url) return url;
++  // A localhost link in a real email would be a dead unsubscribe link.
++  if (process.env.NODE_ENV === "production") throw new Error("NEXT_PUBLIC_APP_URL is not set");
++  return "http://localhost:3000";
++}
+diff --git a/lib/db.ts b/lib/db.ts
+index 8c7466a..a56c36d 100644
+--- a/lib/db.ts
++++ b/lib/db.ts
+@@ -12,6 +12,7 @@ export type User = {
+ 
+ const users = new Map<string, User>();
+ const waitlist = new Set<string>(["early@example.com", "fan@example.com"]);
++const unsubscribed = new Set<string>();
+ 
+ export const db = {
+   createUser(u: Omit<User, "id" | "plan">): User {
+@@ -30,7 +31,10 @@ export const db = {
+     if (u) users.set(id, { ...u, ...patch });
+   },
+   waitlistEmails(): string[] {
+-    return [...waitlist];
++    return [...waitlist].filter((e) => !unsubscribed.has(e.toLowerCase()));
++  },
++  unsubscribe(email: string) {
++    unsubscribed.add(email.toLowerCase());
+   },
+ };
+ 
+diff --git a/lib/unsubscribe.ts b/lib/unsubscribe.ts
+new file mode 100644
+index 0000000..4f90d52
+--- /dev/null
++++ b/lib/unsubscribe.ts
+@@ -0,0 +1,19 @@
++import { createHmac, timingSafeEqual } from "node:crypto";
++
++const secret = () => {
++  const s = process.env.UNSUBSCRIBE_SECRET;
++  if (!s) throw new Error("UNSUBSCRIBE_SECRET is not set");
++  return s;
++};
++
++export const unsubscribeToken = (email: string) =>
++  createHmac("sha256", secret()).update(email.toLowerCase()).digest("hex");
++
++export const verifyUnsubscribeToken = (email: string, token: string) => {
++  const a = Buffer.from(unsubscribeToken(email));
++  const b = Buffer.from(token);
++  return a.length === b.length && timingSafeEqual(a, b);
++};
++
++export const unsubscribeUrl = (appUrl: string, email: string) =>
++  `${appUrl}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${unsubscribeToken(email)}`;

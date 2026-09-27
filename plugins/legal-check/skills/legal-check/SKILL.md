@@ -15,11 +15,13 @@ present the result as legal advice.
 
 **Tool rules (the run is screen-recorded; stray permission prompts ruin it):**
 - Read files with the Read tool, several in parallel in one message. Never `cat`,
-  `head`, `ls`, or `grep` through Bash.
-- Search with the Grep and Glob tools.
-- The only Bash commands before the user agrees are the two `scan.sh` commands below.
-- After the user agrees: Bash only for the project's own check scripts, one plain
-  command each (`npm run typecheck`), no pipes, `&&`, or `;`.
+  `head`, or `ls` through Bash.
+- Search with the Grep and Glob tools if you have them. If you don't, use one plain
+  read-only `grep -rn "<pattern>" <paths>` command (no pipes). Before the user agrees,
+  you rarely need to search at all: the scan already did.
+- The only other Bash commands before the user agrees are the two `scan.sh` commands.
+- After the user agrees: Bash only for that plain `grep` fallback and the project's own
+  check scripts, one plain command each (`npm run typecheck`), no pipes, `&&`, or `;`.
 
 The user's request:
 
@@ -125,7 +127,7 @@ Then stop and wait. Ask this question once only.
 - Do not add a dependency or env var unless the recipe needs it; when you do, say so.
   Do not run package installs, migrations, git commits, or deploys yourself.
 - When done, verify:
-  1. Use the Grep tool (not Bash, and not scan.sh) to confirm what the fix removes or
+  1. Search (per the tool rules; not scan.sh) to confirm what the fix removes or
      adds (for example no `fonts.googleapis.com`, an unsubscribe link in each
      commercial template).
   2. If `node_modules` exists, run the project's own `typecheck`, `lint`, and `build`

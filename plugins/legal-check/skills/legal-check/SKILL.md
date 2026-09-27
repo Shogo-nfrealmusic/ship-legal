@@ -46,8 +46,8 @@ The scan only finds candidates. You decide the status.
 Read only the files the scan points at, plus what you need to decide a rule below
 (for example the email template a send call uses, or the page that renders an upload).
 Do not read node_modules, build output, or lockfiles. Do not re-grep the whole project
-for things the scan already covers. Be quick: this step is a few targeted reads,
-issued in parallel where possible.
+for things the scan already covers. Be quick: use the Read tool (not `cat` in Bash),
+and issue the reads in parallel in one message.
 
 Apply these rules. When the evidence is ambiguous, pick the status the code supports
 and say what you assumed in one short clause. Never invent a problem the code doesn't
@@ -113,10 +113,13 @@ Then stop and wait. Ask this question once only.
 - Do not add a dependency or env var unless the recipe needs it; when you do, say so.
   Do not run package installs, migrations, git commits, or deploys yourself.
 - When done, verify:
-  1. Search the changed project again for what the fix removes or adds
-     (for example no `fonts.googleapis.com`, an unsubscribe link in each commercial template).
+  1. Use the Grep tool (not Bash, and not scan.sh, which now needs a permission prompt)
+     to confirm what the fix removes or adds (for example no `fonts.googleapis.com`,
+     an unsubscribe link in each commercial template).
   2. If `node_modules` exists, run the project's own `typecheck`, `lint`, and `build`
-     scripts that exist in package.json (for example `npm run typecheck`, `npm run build`).
+     scripts that exist in package.json, each as its own plain command with no pipes
+     or `&&` (for example `npm run typecheck`, then `npm run build`), so the user can
+     approve each one.
      Report each result honestly. If one fails because of your change, fix it; if it
      failed before your change, say so. If there is no `node_modules`, say the checks
      were not run and why.

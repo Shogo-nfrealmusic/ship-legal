@@ -1,0 +1,7 @@
+body { font-family: "DM Sans", sans-serif; margin: 0; color: #222; }
+.hero, #pricing, .newsletter, .reviews { max-width: 720px; margin: 48px auto; padding: 0 16px; }
+.btn { display: inline-block; background: #6366f1; color: #fff; padding: 12px 20px; border-radius: 10px; text-decoration: none; cursor: pointer; }
+.price { font-size: 40px; font-weight: 700; }
+footer { color: #bbb; font-size: 12px; text-align: center; }
+*:focus { outline: none; }
+.reviews .review { color: #c7c7c7; }

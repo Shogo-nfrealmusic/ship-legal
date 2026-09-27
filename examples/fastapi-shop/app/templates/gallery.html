@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Community gallery</h1>
+{% for f in files %}<img src="/uploads/{{ f }}" width="240">{% endfor %}
+{% endblock %}

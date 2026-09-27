@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Create account</h1>
+<form action="/signup" method="post">
+  <input name="name" placeholder="Name">
+  <input name="email" type="email" placeholder="Email">
+  <input name="password" type="password" placeholder="Password">
+  <button>Sign up</button>
+</form>
+{% endblock %}

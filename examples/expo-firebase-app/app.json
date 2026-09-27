@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "InstaVibe",
+    "slug": "instavibe",
+    "version": "1.0.0",
+    "scheme": "instavibe",
+    "ios": { "bundleIdentifier": "com.example.instavibe" },
+    "android": { "package": "com.example.instavibe" },
+    "plugins": ["expo-router"]
+  }
+}

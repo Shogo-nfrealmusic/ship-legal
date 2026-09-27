@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Your art, printed beautifully.</h1>
+<img src="/static/hero.jpg">
+<p>Small ${{ '%.2f' % (prices.small / 100) }} · Large ${{ '%.2f' % (prices.large / 100) }}</p>
+<form action="/order" method="post" enctype="multipart/form-data">
+  <input type="file" name="artwork" required>
+  <select name="size"><option value="small">Small</option><option value="large">Large</option></select>
+  <input name="card_number" placeholder="Card number" autocomplete="cc-number">
+  <input name="card_expiry" placeholder="MM/YY">
+  <input name="card_cvc" placeholder="CVC">
+  <button>Order print</button>
+</form>
+<a href="/signup">Create an account</a>
+{% endblock %}

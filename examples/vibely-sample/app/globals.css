@@ -1,0 +1,7 @@
+:root { --fg: #111; --bg: #fafafa; --accent: #7c3aed; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Inter", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+main { max-width: 640px; margin: 0 auto; padding: 48px 20px; }
+button, .btn { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 600; cursor: pointer; }
+input { display: block; width: 100%; padding: 10px 12px; margin: 6px 0 16px; border: 1px solid #ddd; border-radius: 8px; }
+footer { margin-top: 64px; color: #777; font-size: 14px; }

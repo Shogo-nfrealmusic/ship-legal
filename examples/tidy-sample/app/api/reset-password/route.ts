@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { passwordResetEmail } from "@/emails/password-reset";
 import { findUserByEmail } from "@/lib/users";
+import { rateLimited } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
+  if (rateLimited(req)) return NextResponse.json({ ok: false }, { status: 429 });
   const { email } = await req.json();
   const user = await findUserByEmail(email);
   if (user) {

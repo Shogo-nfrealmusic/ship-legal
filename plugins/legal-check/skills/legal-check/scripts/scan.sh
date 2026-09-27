@@ -58,16 +58,25 @@ grep -E '(^|/)\.env(\.[A-Za-z0-9_-]+)?$' "$ALL" | grep -vE '\.(example|sample|te
 
 FILES_SCANNED="$(tr -cd '\0' < "$CODE" | wc -c | tr -d ' ')"
 
-# grep_files LISTFILE REGEX [FLAGS] -> raw "file:line:text" hits in $TMP/hits
+# grep_files LISTFILE REGEX [FLAGS] [OUT] -> raw "file:line:text" hits in OUT (default $TMP/hits)
 grep_files() {
-  list="$1"; re="$2"; flags="${3--i}"
+  list="$1"; re="$2"; flags="${3--i}"; gout="${4:-$TMP/hits}"
   if [ -s "$list" ]; then
     # shellcheck disable=SC2086
-    xargs -0 grep -nHE $flags -e "$re" -- < "$list" 2>/dev/null > "$TMP/hits"
+    xargs -0 grep -nHE $flags -e "$re" -- < "$list" 2>/dev/null > "$gout"
   else
-    : > "$TMP/hits"
+    : > "$gout"
   fi
 }
+
+# Parallel jobs: each async key prints a placeholder line now and writes its real output
+# to its own file; the placeholders are expanded in order at the end.
+J=0
+PAR="$( (getconf _NPROCESSORS_ONLN || sysctl -n hw.ncpu) 2>/dev/null | head -n 1)"
+case "$PAR" in ''|*[!0-9]*) PAR=4 ;; esac
+[ "$PAR" -gt 8 ] && PAR=8
+job_start() { J=$((J+1)); JF="$TMP/job.$J"; echo "@@JOB $J@@"; }
+job_throttle() { if [ $((J % PAR)) -eq 0 ]; then wait; fi; }
 
 print_hits() {
   key="$1"; f="$2"; redact="${3:-}"
@@ -95,12 +104,20 @@ print_hits() {
   fi
 }
 
-# emit KEY REGEX [FLAGS] — grep source files
-emit() { grep_files "$CODE" "$2" "${3--i}"; print_hits "$1" "$TMP/hits"; }
+# emit KEY REGEX [FLAGS] — grep source files (async)
+emit() {
+  job_start
+  ( grep_files "$CODE" "$2" "${3--i}" "$JF.hits"; print_hits "$1" "$JF.hits" > "$JF" ) &
+  job_throttle
+}
 # files_matching PATH_REGEX -> NUL list of source files in $TMP/sub
 files_matching() { tr '\0' '\n' < "$CODE" | grep -iE "$1" | tr '\n' '\0' > "$TMP/sub"; }
-# emit_in KEY PATH_REGEX REGEX — grep only source files whose path matches PATH_REGEX
-emit_in() { files_matching "$2"; grep_files "$TMP/sub" "$3"; print_hits "$1" "$TMP/hits"; }
+# emit_in KEY PATH_REGEX REGEX — grep only source files whose path matches PATH_REGEX (async)
+emit_in() {
+  files_matching "$2"; job_start; cp "$TMP/sub" "$JF.list"
+  ( grep_files "$JF.list" "$3" -i "$JF.hits"; print_hits "$1" "$JF.hits" > "$JF" ) &
+  job_throttle
+}
 # emit_files KEY REGEX [FLAGS] — match on file paths
 emit_files() {
   # shellcheck disable=SC2086
@@ -111,16 +128,22 @@ emit_files() {
 perl_scan() {
   key="$1"; code="$2"; list="$3"
   if [ "$HAVE_PERL" -eq 0 ]; then echo "$key: (perl missing)"; return; fi
-  if [ -s "$list" ]; then
-    xargs -0 perl -0777 -ne "$code" -- < "$list" 2>/dev/null > "$TMP/hits"
-  else
-    : > "$TMP/hits"
-  fi
-  print_hits "$key" "$TMP/hits"
+  job_start; cp "$list" "$JF.list"
+  (
+    if [ -s "$JF.list" ]; then
+      # one perl process over all files, so END blocks see every file
+      xargs -0 perl -0777 -ne "$code" -- < "$JF.list" 2>/dev/null > "$JF.hits"
+    else
+      : > "$JF.hits"
+    fi
+    print_hits "$key" "$JF.hits" > "$JF"
+  ) &
+  job_throttle
 }
 
 Q="[\"']"      # a quote character, for readability in patterns
 
+{
 echo "# legal-check scan v2"
 echo "root: $(pwd)"
 echo "files_scanned: $FILES_SCANNED"
@@ -351,4 +374,13 @@ emit persona_denial "never (say|reveal|admit|mention)[^.\"']{0,30}(AI|bot|langua
 emit testimonials "testimonial|reviews?[[:space:]]*=[[:space:]]*\[|★★★★★|${Q}?stars${Q}?[[:space:]]*:|rating[[:space:]]*:[[:space:]]*[45]|class=${Q}review"
 emit claims "(trusted|used|loved) by [0-9][0-9,.]*[kKmM+]*|[0-9][0-9,.]*[kKmM]?\+? (happy |active )?(users|customers|athletes|developers|founders|students|creators|teams|members|clients)|#1 |number one|guaranteed (results|to)|clinically (proven|tested)|doctor[- ]recommended|as seen (on|in)|lose [0-9]+ ?(kg|lbs|pounds)|doubled? (my|your) (output|income|revenue)"
 
+} > "$TMP/main"
+wait
+# expand placeholders in order
+while IFS= read -r line; do
+  case "$line" in
+    "@@JOB "*"@@") n="${line#@@JOB }"; n="${n%@@}"; cat "$TMP/job.$n" 2>/dev/null ;;
+    *) printf '%s\n' "$line" ;;
+  esac
+done < "$TMP/main"
 exit 0

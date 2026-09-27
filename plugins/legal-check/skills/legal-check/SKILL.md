@@ -163,8 +163,9 @@ Then stop and wait. Ask this once only.
   (package.json / requirements.txt / Gemfile) and `.env.example`, and say an install is
   needed. Don't run installs, migrations, deploys, `supabase`/`firebase` CLIs, or git
   commits yourself.
-- **Verify, then report honestly.** Search (per the tool rules) that what each fix
-  removes is gone and what it adds is there. Then run whatever checks the project has,
+- **Verify, then report honestly.** Search (per the tool rules; don't run scan.sh again,
+  it would need a permission prompt now) that what each fix removes is gone and what it
+  adds is there. Then run whatever checks the project has,
   one plain command each:
   - JS/TS with node_modules: the `typecheck`, `lint`, `test`, `build` scripts that exist
     (use its package manager); no scripts but `typescript` installed → `npx tsc --noEmit`.

@@ -40,6 +40,7 @@ export default function SignupPage() {
             {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
         </label>
+        <p>By signing up you agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.</p>
         <button type="submit">Sign up</button>
       </form>
       {message && <p>{message}</p>}

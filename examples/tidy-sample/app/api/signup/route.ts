@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createUser } from "@/lib/users";
+import { rateLimited } from "@/lib/rate-limit";
 
 function ageFrom(year: number, month: number): number {
   const now = new Date();
@@ -10,6 +11,7 @@ function ageFrom(year: number, month: number): number {
 }
 
 export async function POST(req: Request) {
+  if (rateLimited(req)) return NextResponse.json({ message: "Too many attempts. Try again later." }, { status: 429 });
   const { email, password, birthYear, birthMonth } = await req.json();
   const age = ageFrom(Number(birthYear), Number(birthMonth));
 

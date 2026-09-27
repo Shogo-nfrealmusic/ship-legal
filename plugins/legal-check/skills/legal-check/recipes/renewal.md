@@ -1,44 +1,35 @@
 # Recipe: subscriptions (California Automatic Renewal Law)
 
-Goal: before the person pays, they see the renewal terms right next to the button,
-they actively agree, and they can cancel online without talking to anyone.
+Goal: before paying, people see the renewal terms right next to the subscribe button,
+actively agree, and can cancel online by themselves.
 
-1. Disclosure in visual proximity to the subscribe button (same card, directly above
-   or below, readable size and contrast; not in a tooltip or a linked page). Include:
-   - the price and how often it is charged ("$12 charged every month"),
-   - that it continues until they cancel,
-   - how to cancel ("Cancel anytime in Settings → Billing"),
-   - if there is a free trial: when it ends and what is charged then.
-   Use the project's real price. If the price lives in Stripe only, read it from the
-   code/env the page already uses, or use a clearly marked TODO; never guess a price.
-2. Affirmative consent: an unchecked checkbox next to the disclosure
-   ("I agree to the automatic renewal terms above"), and the subscribe button is
-   disabled until it is checked. Also check it on the server if the request carries it.
-3. Repeat the terms on the Stripe Checkout page:
-   ```ts
-   stripe.checkout.sessions.create({
-     mode: "subscription",
-     // ...
-     custom_text: { submit: { message: "Your subscription renews automatically every month at $12 until you cancel. Cancel anytime in Settings → Billing." } },
-   });
-   ```
-4. Online cancel path: Stripe Customer Portal.
-   ```ts
-   // app/api/billing-portal/route.ts
-   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
-   const session = await stripe.billingPortal.sessions.create({ customer: user.stripeCustomerId, return_url: `${appUrl}/settings` });
-   return NextResponse.redirect(session.url, 303);
-   ```
-   Add a visible "Manage or cancel subscription" button in account settings that posts
-   to this route. If the app never stores the Stripe customer id, say so: it must be
-   saved after checkout (webhook `checkout.session.completed` → `session.customer`).
-   Do not build that webhook unless the project already has webhook handling; list it
-   as a Human TODO otherwise.
+## Done when
+- In visual proximity to every subscribe/upgrade button (same card, directly above or
+  below, readable size and contrast): price and frequency ("$12 charged every month"),
+  that it continues until cancelled, how to cancel; trial: when it ends and what is
+  charged. Use the real price from the code; never guess (TODO if unknown).
+- An unchecked consent checkbox ("I agree to the automatic renewal terms above") must be
+  ticked before the button works; if a server creates the checkout, it rejects requests
+  without consent.
+- The hosted checkout repeats the terms where possible (Stripe Checkout
+  `custom_text.submit.message`).
+- A self-serve cancel path exists: e.g. Stripe Customer Portal
+  (`stripe.billingPortal.sessions.create({ customer, return_url })`) behind a visible
+  "Manage or cancel subscription" link in account settings. If the customer id isn't
+  stored, say so and add Human TODO (webhook `checkout.session.completed`).
 
-Do not claim:
-- that every renewal must be refunded (the "unconditional gift" rule in §17603 is about
-  goods sent without consent);
-- that the FTC "click-to-cancel" rule applies (it was vacated by the 8th Circuit on
-  2025-07-08).
-Human TODO: turn on cancellation in the Stripe Customer Portal settings; have a lawyer
-check trial, price-change notice, and reminder rules for your plans.
+## Stack notes
+- Stripe Payment Link / pricing table on a static page (no backend): put the disclosure +
+  checkbox next to the link (disable the link until checked with a few lines of JS);
+  enable "customer portal" and share its login link (Stripe's no-code customer portal
+  link) in the footer/account area — Human TODO to turn it on and paste the URL.
+- Server frameworks (Next, Remix, Express, Flask, FastAPI, Django, Rails): portal route
+  that looks up the signed-in user's customer id and redirects (303).
+- Expo / React Native with in-app purchases (RevenueCat, StoreKit): Apple/Google handle
+  renewal terms and cancellation in the store; add the disclosure text near the paywall
+  button and a "Manage subscription" button that opens the store's subscription page
+  (`Linking.openURL("https://apps.apple.com/account/subscriptions")` on iOS,
+  `https://play.google.com/store/account/subscriptions` on Android).
+
+Do not claim every renewal must be refunded, or cite the FTC click-to-cancel rule (the
+8th Circuit vacated it on 2025-07-08).

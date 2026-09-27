@@ -1,56 +1,35 @@
 # Recipe: commercial email (CAN-SPAM) — unsubscribe + postal address
 
-First decide what each email is.
-- Commercial: promotes a product or service (launch announcements, newsletters,
-  promo codes, "we're live", re-engagement). Needs this fix.
-- Transactional: completes something the user started (password reset, receipt,
-  login code, security notice). Opt-out and address rules don't apply to these. Leave them.
+First classify each email. Commercial = promotes a product or service (launch, newsletter,
+promo code, re-engagement): needs this fix. Transactional = completes something the user
+started (password reset, receipt, login code, security notice): leave it.
 
-Fix for every commercial email:
-1. Footer with a working unsubscribe link and a physical postal address.
-   Never invent an address. Use a clearly marked placeholder that the human must fill:
-   ```ts
-   // lib/company.ts
-   // TODO(legal-check): replace with your real postal address (street address, or a
-   // registered P.O. box / private mailbox). CAN-SPAM requires a valid physical postal address.
-   export const COMPANY_POSTAL_ADDRESS = process.env.COMPANY_POSTAL_ADDRESS ?? "TODO: your postal address";
-   ```
-   Footer HTML: `<p style="font-size:12px;color:#777">You're getting this because you joined the X waitlist.
-   <a href="${unsubscribeUrl}">Unsubscribe</a> · ${COMPANY_POSTAL_ADDRESS}</p>`
-2. Unsubscribe link carries a signed token, so nobody can unsubscribe someone else:
-   ```ts
-   // lib/unsubscribe.ts
-   import { createHmac, timingSafeEqual } from "node:crypto";
-   const secret = () => {
-     const s = process.env.UNSUBSCRIBE_SECRET;
-     if (!s) throw new Error("UNSUBSCRIBE_SECRET is not set");
-     return s;
-   };
-   export const unsubscribeToken = (email: string) =>
-     createHmac("sha256", secret()).update(email.toLowerCase()).digest("hex");
-   export const verifyUnsubscribeToken = (email: string, token: string) => {
-     const a = Buffer.from(unsubscribeToken(email)); const b = Buffer.from(token);
-     return a.length === b.length && timingSafeEqual(a, b);
-   };
-   export const unsubscribeUrl = (appUrl: string, email: string) =>
-     `${appUrl}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${unsubscribeToken(email)}`;
-   ```
-3. Handler route, no login required:
-   - GET verifies the token and shows a small page with an "Unsubscribe" button that
-     POSTs back to the same URL. GET must not change anything: email security scanners
-     open links automatically and would unsubscribe people.
-   - POST verifies the token and marks the address as unsubscribed. The same POST serves
-     one-click unsubscribe from mail apps (`List-Unsubscribe-Post`, RFC 8058).
-   - Build the link from the app's public URL. If that env var is missing in production,
-     throw instead of falling back to localhost (a dead link breaks the opt-out).
-4. Sending code: skip unsubscribed addresses, and add headers
-   `List-Unsubscribe: <https://.../api/unsubscribe?...>` and
-   `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (Resend: `headers: {...}`).
-   The unsubscribe URL is per recipient, so build the HTML per recipient.
-5. Store: add an `unsubscribed` set/column next to where the list lives. If the project
-   has a real database, follow its schema style and say a migration is needed; do not
-   run migrations yourself.
+## Done when
+- Every commercial email has a footer with a working unsubscribe link and a postal
+  address placeholder `TODO(legal-check): postal address` read from config/env
+  (`COMPANY_POSTAL_ADDRESS`); never invent an address.
+- The unsubscribe link carries a signed token (HMAC of the email with a secret from env;
+  constant-time compare), so nobody can unsubscribe someone else.
+- GET on the link only shows a confirm button (mail scanners open links); POST does the
+  unsubscribe and also serves one-click unsubscribe (`List-Unsubscribe-Post`, RFC 8058).
+- Sending skips unsubscribed addresses and adds headers `List-Unsubscribe: <url>` and
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click`; the URL is built per recipient
+  from the app's public base URL (throw in production if it's missing — a dead link
+  breaks the opt-out).
+- Unsubscribed addresses are stored where the list lives (table/column/collection); if a
+  migration is needed, write it but don't run it.
 
-Rules to state in the report: opt-outs must be honored within 10 business days, and the
-unsubscribe link must keep working for at least 30 days after the email is sent.
-Human TODO: set `UNSUBSCRIBE_SECRET` and `COMPANY_POSTAL_ADDRESS` in the hosting env.
+## Stack notes
+- Node (Next API routes, Express, Remix actions, SvelteKit endpoints, Nuxt server
+  routes): `crypto.createHmac("sha256", secret)`, `timingSafeEqual`.
+- Python (Flask/FastAPI/Django): `hmac.new(secret, email.lower().encode(), hashlib.sha256).hexdigest()`,
+  `hmac.compare_digest`; routes `GET/POST /unsubscribe`.
+- Rails: `ActiveSupport::MessageVerifier` or `Rails.application.message_verifier(:unsubscribe)`.
+- Supabase: an Edge Function `unsubscribe` + an `unsubscribes` table (RLS on, no public
+  policies; the function uses the service role).
+- No backend (form posts to Mailchimp/ConvertKit/Airtable): hosted ESPs add their own
+  unsubscribe + address footer; make sure the template uses them, and put the address
+  into the ESP's account settings (Human TODO).
+
+Say in the report: opt-outs must be honored within 10 business days; the link must work
+for at least 30 days after sending.

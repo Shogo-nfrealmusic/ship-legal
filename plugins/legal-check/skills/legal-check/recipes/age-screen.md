@@ -1,65 +1,40 @@
 # Recipe: neutral age screen (COPPA)
 
-Goal: stop collecting data from users you would then know are under 13, without
-teaching people which answer gets them in.
+Goal: stop collecting data from users you would then know are under 13, without hinting
+which answer gets them in. If the app looks directed to children, an age screen is NOT
+enough (verifiable parental consent is needed): put that in Human TODO, don't code it.
 
-Do:
-- Ask for birth month and year (or full date) at sign-up, before the account is created.
-  Offer every year, including recent ones. No pre-selected adult year.
-- Do not write "you must be 13+" next to the field, and do not use a
-  "Yes, I am over 13" checkbox. Both hint at the "right" answer.
-- Compute the age on the server, not only in the browser.
-- Under 13: do not create the account and do not store the email, name, or birth date.
-  Show a neutral message ("Sorry, we can't create an account for you right now.").
-- Set a short-lived cookie (e.g. 24 h) so the form cannot simply be resubmitted
-  with an older year right away.
-- Month and year are enough for a screen, but someone who turns 13 later in the current
-  month gets through. Ask for the day too if the project needs it exact.
-- Store only what you need afterwards, e.g. `ageVerified13Plus: true`, not the birth date.
-- OAuth-only sign-up (Google, GitHub...): put the same screen before the OAuth redirect,
-  and check the cookie in the OAuth callback before creating the user.
+## Done when
+- Sign-up asks birth month + year (or full date) before the account exists; every year
+  selectable, no pre-selected adult year, no "you must be 13+" text next to it, no
+  "I am over 13" checkbox.
+- The age is checked where the user can't bypass it (server, edge function, backend);
+  a client-only check is acceptable only for a static site with no backend, and you
+  must say so.
+- Under 13: no account, nothing stored (not even the email); neutral message
+  ("Sorry, we can't create an account for you right now."); a ~24 h marker (cookie /
+  AsyncStorage / session) blocks an immediate retry with another year.
+- Only `is13Plus: true` (or similar) is stored, not the birth date.
 
-Do not:
-- Do not add identity or ID-document checks. That is not what this fix is.
-- If the app looks directed to children (kid-focused content, cartoons, school ages),
-  an age screen is NOT enough. COPPA then requires verifiable parental consent before
-  collecting children's data. Put that in the Human TODO list instead of coding it.
+## Stack notes
+- Next.js / Remix / SvelteKit / Nuxt / Astro SSR: check in the route handler / action /
+  server endpoint before creating the user.
+- Vite/React SPA + Supabase: move sign-up into a Supabase Edge Function that checks the
+  age and calls `auth.admin.createUser` with the service-role key from `Deno.env`; the
+  page calls `supabase.functions.invoke("signup", { body })`. If you can't add a function,
+  add a database check instead (e.g. a `profiles.is_13_plus` column with
+  `check (is_13_plus)`) and say the client check alone is bypassable.
+- Firebase (web or Expo): check in a Cloud Function (callable) that creates the user
+  with the Admin SDK, or at least block in the client AND in Firestore rules
+  (`request.resource.data.is13Plus == true` on the user doc); say which you did.
+- Expo / React Native: use two pickers (or TextInputs with number pads) for month and
+  year; store the 24 h block in AsyncStorage/SecureStore if available, else in memory.
+- Flask / FastAPI / Django / Rails: validate in the POST handler / form / model before
+  saving; set a signed cookie (`set_cookie(..., max_age=86400, httponly=True)`).
+- OAuth-only sign-up: show the screen before redirecting to the provider and check the
+  marker in the OAuth callback before creating the user.
+- Month + year lets someone who turns 13 later this month through; ask the day too if the
+  project needs it exact.
 
-Next.js App Router sketch (adapt names to the project):
-
-```tsx
-// in the sign-up form
-const THIS_YEAR = new Date().getFullYear();
-const YEARS = Array.from({ length: 101 }, (_, i) => THIS_YEAR - i);
-<label>Birth month
-  <select name="birthMonth" required defaultValue="">
-    <option value="" disabled>Month</option>
-    {Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
-  </select>
-</label>
-<label>Birth year
-  <select name="birthYear" required defaultValue="">
-    <option value="" disabled>Year</option>
-    {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
-  </select>
-</label>
-```
-
-```ts
-// in the sign-up route handler, BEFORE creating the user
-import { cookies } from "next/headers";
-function ageFrom(year: number, month: number) {
-  const now = new Date();
-  let age = now.getFullYear() - year;
-  if (now.getMonth() + 1 < month) age -= 1;
-  return age;
-}
-const jar = await cookies();
-if (jar.get("signup_blocked")) return NextResponse.json({ error: "Sorry, we can't create an account for you right now." }, { status: 403 });
-const age = ageFrom(Number(birthYear), Number(birthMonth));
-if (!Number.isFinite(age) || age < 13) {
-  jar.set("signup_blocked", "1", { httpOnly: true, sameSite: "lax", maxAge: 60 * 60 * 24 });
-  return NextResponse.json({ error: "Sorry, we can't create an account for you right now." }, { status: 403 });
-}
-// ...create the user; do not save birthYear/birthMonth
-```
+## Age helper (any language)
+age = currentYear - birthYear; if currentMonth < birthMonth: age -= 1

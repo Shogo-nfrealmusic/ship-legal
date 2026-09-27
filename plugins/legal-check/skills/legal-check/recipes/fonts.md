@@ -1,31 +1,26 @@
-# Recipe: stop loading Google Fonts from Google's servers
+# Recipe: stop loading Google Fonts from Google's servers (GDPR)
 
-Goal: the visitor's browser must not contact fonts.googleapis.com or fonts.gstatic.com.
+Goal: visitors' browsers never contact fonts.googleapis.com or fonts.gstatic.com.
 
-Pick the first option that fits the project:
+## Done when
+- No `fonts.googleapis.com` / `fonts.gstatic.com` left in source (links, preconnects,
+  CSS `@import`), and the same font family and weights still render.
 
-1. Next.js (13+): use `next/font/google`. Next downloads the font at build time and
-   serves it from your own domain, so browsers never contact Google. No new dependency.
-   ```tsx
-   // app/layout.tsx
-   import { Inter } from "next/font/google";
-   const inter = Inter({ subsets: ["latin"], weight: ["400", "600", "800"], display: "swap", variable: "--font-inter" });
-   <html lang="en" className={inter.variable}>
-   ```
-   Then in CSS: `font-family: var(--font-inter), system-ui, sans-serif;`
-   Keep the weights/styles the old <link> URL asked for (e.g. `wght@400;600;800`).
-   Font names with spaces use underscores: `Playfair_Display`.
-2. Any other bundler (Vite, Astro, Remix, SvelteKit...): `@fontsource/<font>` packages.
-   `npm install @fontsource/inter` then `import "@fontsource/inter/400.css";` in the entry
-   file. This adds a dependency: list the install command in the fix plan and say it
-   must be run.
-3. Plain HTML: download the .woff2 files into the project and use `@font-face` with a
-   local `src: url("/fonts/inter-400.woff2")`.
-
-Then remove every trace of the CDN:
-- `<link rel="preconnect" href="https://fonts.googleapis.com">` and `...fonts.gstatic.com`
-- `<link href="https://fonts.googleapis.com/css2?...">`
-- CSS `@import url("https://fonts.googleapis.com/...")`
-
-Check afterwards: search the project for `fonts.googleapis.com` and `fonts.gstatic.com`.
-Both must be gone from source (build output folders don't count).
+## Stack notes (pick the first that fits)
+- Next.js: `next/font/google` self-hosts at build time (no new dependency):
+  `const inter = Inter({ subsets: ["latin"], weight: ["400","700"], variable: "--font-inter" })`,
+  put `inter.variable` on `<html>`, use `var(--font-inter)` in CSS. Spaces in names → `_`.
+- Vite/React, Vue, Svelte/SvelteKit, Astro, Remix: `@fontsource/<font>` —
+  `import "@fontsource/inter/400.css"` in the entry file (main.tsx, main.ts, +layout,
+  Layout.astro, root.tsx). New dependency: say it, and run the project's install only if
+  the user approved installs; otherwise list the command in Human TODO.
+  Nuxt: `@nuxt/fonts` module (self-hosts) or @fontsource.
+- Plain HTML / Flask / FastAPI / Django / Rails templates: download the .woff2 files into
+  the static folder (`static/fonts/`, `public/fonts/`, `app/assets/fonts/`) and add
+  `@font-face { font-family: "Inter"; src: url("/static/fonts/inter-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }`.
+  You cannot download files: create the CSS, keep the family name, and add a Human TODO
+  "download these woff2 files (e.g. from google-webfonts-helper or the font's GitHub
+  release) into <folder>". Until then the browser falls back to system fonts, which is
+  safe.
+- Expo / React Native: fonts are bundled by `expo-font`; Google CDN use there is rare. If
+  a WebView loads Google Fonts, treat it like plain HTML.

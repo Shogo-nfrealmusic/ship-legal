@@ -1,0 +1,778 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..47ed900
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,14 @@
++APP_ENV=development
++STRIPE_SECRET_KEY=
++MAILGUN_API_KEY=
++UNSUBSCRIBE_SECRET=
++ADMIN_USERNAME=
++ADMIN_PASSWORD=
++ADMIN_EMAIL=
++PUBLIC_BASE_URL=
++COMPANY_POSTAL_ADDRESS=
++CONTACT_EMAIL=
++DMCA_AGENT_NAME=
++DMCA_AGENT_ADDRESS=
++DMCA_AGENT_PHONE=
++DMCA_AGENT_EMAIL=
+diff --git a/.gitignore b/.gitignore
+index ac17074..e32b1f7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,4 +1,5 @@
+ .venv
++.env
+ __pycache__
+ uploads/
+ *.db
+diff --git a/app/config.py b/app/config.py
+index e20482b..1b3e4fe 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,4 +1,30 @@
+-# Settings. TODO move to env vars later.
+-STRIPE_SECRET_KEY = "sk_live_FAKEdemo1234"
+-MAILGUN_API_KEY = "key-FAKEdemo000000000000000000000000"
+-ADMIN_EMAIL = "owner@printpal.example"
++# Settings come from environment variables (see .env.example). Never put values here.
++import os
++
++PRODUCTION = os.environ.get("APP_ENV") == "production"
++
++
++def required(name: str) -> str:
++    """Env value that must be set before real users see it; refuses in production when missing."""
++    value = os.environ.get(name, "")
++    if value:
++        return value
++    if PRODUCTION:
++        raise RuntimeError(f"{name} is not set")
++    return f"TODO(legal-check): set {name}"
++
++
++def secret(name: str) -> str:
++    """Secret env value; empty outside production when missing, error in production."""
++    value = os.environ.get(name, "")
++    if not value and PRODUCTION:
++        raise RuntimeError(f"{name} is not set")
++    return value
++
++
++STRIPE_SECRET_KEY = secret("STRIPE_SECRET_KEY")
++MAILGUN_API_KEY = secret("MAILGUN_API_KEY")
++UNSUBSCRIBE_SECRET = secret("UNSUBSCRIBE_SECRET")
++ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "")
++ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
++ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+diff --git a/app/db.py b/app/db.py
+index 2f3b0cd..004c61e 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -11,7 +11,10 @@ def conn() -> sqlite3.Connection:
+         """
+         create table if not exists users (id integer primary key, email text unique, password_hash text, name text);
+         create table if not exists orders (id integer primary key, user_id integer, artwork text, size text,
+-            card_number text, card_expiry text, card_cvc text, total_cents integer);
++            total_cents integer, status text default 'pending', stripe_session_id text);
++        create table if not exists unsubscribes (email text primary key, created_at text default current_timestamp);
++        create table if not exists reports (id integer primary key, item text, reason text,
++            created_at text default current_timestamp);
+         """
+     )
+     return c
+diff --git a/app/emailer.py b/app/emailer.py
+index f30b367..cb52739 100644
+--- a/app/emailer.py
++++ b/app/emailer.py
+@@ -1,10 +1,42 @@
++import hashlib
++import hmac
++from html import escape
++from urllib.parse import urlencode
++
+ import httpx
+ 
+-from app.config import MAILGUN_API_KEY
++from app.config import MAILGUN_API_KEY, PRODUCTION, UNSUBSCRIBE_SECRET, required
++from app.db import conn
++
++
++def unsubscribe_token(email: str) -> str:
++    if not UNSUBSCRIBE_SECRET:
++        raise RuntimeError("UNSUBSCRIBE_SECRET is not set")
++    return hmac.new(UNSUBSCRIBE_SECRET.encode(), email.lower().encode(), hashlib.sha256).hexdigest()
++
++
++def valid_unsubscribe_token(email: str, token: str) -> bool:
++    return hmac.compare_digest(unsubscribe_token(email), token)
++
++
++def is_unsubscribed(email: str) -> bool:
++    return conn().execute("select 1 from unsubscribes where email = ?", (email.lower(),)).fetchone() is not None
+ 
+ 
+ def send_promo(to: str, name: str) -> None:
+-    """Weekly promo blast."""
++    """Weekly promo blast (commercial email: CAN-SPAM unsubscribe + postal address)."""
++    if not (MAILGUN_API_KEY and UNSUBSCRIBE_SECRET):
++        if PRODUCTION:
++            raise RuntimeError("MAILGUN_API_KEY and UNSUBSCRIBE_SECRET must be set")
++        return
++    if is_unsubscribed(to):
++        return
++    # required() raises in production while these are missing, so no TODO text is ever mailed.
++    base_url = required("PUBLIC_BASE_URL").rstrip("/")
++    address = required("COMPANY_POSTAL_ADDRESS")
++    if not PRODUCTION and (address.startswith("TODO") or base_url.startswith("TODO")):
++        return
++    unsubscribe_url = f"{base_url}/unsubscribe?" + urlencode({"email": to, "token": unsubscribe_token(to)})
+     httpx.post(
+         "https://api.mailgun.net/v3/mg.printpal.example/messages",
+         auth=("api", MAILGUN_API_KEY),
+@@ -12,6 +44,10 @@ def send_promo(to: str, name: str) -> None:
+             "from": "PrintPal <deals@printpal.example>",
+             "to": to,
+             "subject": "40% off canvas prints this weekend only!",
+-            "html": f"<p>Hi {name},</p><p>All canvas prints are 40% off until Sunday. <a href='https://printpal.example'>Order now</a></p>",
++            "html": f"<p>Hi {escape(name)},</p><p>All canvas prints are 40% off until Sunday. <a href='{base_url}'>Order now</a></p>"
++            f"<p style='font-size:12px'>PrintPal · {escape(address)}<br>"
++            f"<a href='{escape(unsubscribe_url)}'>Unsubscribe</a> from promotional emails.</p>",
++            "h:List-Unsubscribe": f"<{unsubscribe_url}>",
++            "h:List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+         },
+     )
+diff --git a/app/main.py b/app/main.py
+index de2ee17..7bdec7a 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -1,13 +1,18 @@
+ import hashlib
++import hmac
++import secrets
++import time
+ from pathlib import Path
+ 
+-from fastapi import FastAPI, File, Form, Request, UploadFile
+-from fastapi.responses import HTMLResponse, RedirectResponse
++from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
++from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
++from fastapi.security import HTTPBasic, HTTPBasicCredentials
+ from fastapi.staticfiles import StaticFiles
+ from fastapi.templating import Jinja2Templates
+ 
++from app.config import ADMIN_PASSWORD, ADMIN_USERNAME, STRIPE_SECRET_KEY, required
+ from app.db import conn
+-from app.emailer import send_promo
++from app.emailer import send_promo, valid_unsubscribe_token
+ 
+ BASE = Path(__file__).resolve().parent
+ UPLOADS = BASE.parent / "uploads"
+@@ -21,14 +26,82 @@ templates = Jinja2Templates(directory=BASE / "templates")
+ PRICES = {"small": 1900, "large": 3900}
+ SERVICE_FEE_CENTS = 499
+ 
++# In-memory limiter: per process, resets on restart. Behind a proxy, run uvicorn with --proxy-headers.
++RATE_LIMIT = 10
++RATE_WINDOW = 15 * 60
++_attempts: dict[str, list[float]] = {}
++
++
++def too_many(bucket: str) -> bool:
++    now = time.monotonic()
++    hits = [t for t in _attempts.get(bucket, []) if now - t < RATE_WINDOW]
++    _attempts[bucket] = hits
++    return len(hits) >= RATE_LIMIT
++
++
++def record_attempt(bucket: str) -> None:
++    _attempts.setdefault(bucket, []).append(time.monotonic())
++
++
++def rate_limited() -> HTMLResponse:
++    return HTMLResponse("Too many attempts. Try again later.", status_code=429, headers={"Retry-After": str(RATE_WINDOW)})
++
++
++def client_ip(request: Request) -> str:
++    return request.client.host if request.client else "unknown"
++
+ 
+ def hash_pw(pw: str) -> str:
+-    return hashlib.sha256(pw.encode()).hexdigest()
++    salt = secrets.token_bytes(16)
++    digest = hashlib.scrypt(pw.encode(), salt=salt, n=2**14, r=8, p=1)
++    return f"scrypt${salt.hex()}${digest.hex()}"
++
++
++def verify_pw(pw: str, stored: str) -> bool:
++    if stored.startswith("scrypt$"):
++        _, salt, digest = stored.split("$")
++        return hmac.compare_digest(hashlib.scrypt(pw.encode(), salt=bytes.fromhex(salt), n=2**14, r=8, p=1).hex(), digest)
++    # Legacy unsalted SHA-256 hash; re-hashed with scrypt on the next successful login.
++    return hmac.compare_digest(hashlib.sha256(pw.encode()).hexdigest(), stored)
++
++
++def authenticate(request: Request, email: str, password: str):
++    """Checks email + password with per-IP and per-email limits on failures. Returns the user row or None."""
++    buckets = [f"login:ip:{client_ip(request)}", f"login:email:{email.lower()}"]
++    if any(too_many(b) for b in buckets):
++        raise HTTPException(429, "Too many attempts. Try again later.", headers={"Retry-After": str(RATE_WINDOW)})
++    c = conn()
++    row = c.execute("select * from users where email = ?", (email,)).fetchone()
++    if not row or not verify_pw(password, row["password_hash"]):
++        for b in buckets:
++            record_attempt(b)
++        return None
++    for b in buckets:
++        _attempts.pop(b, None)
++    if not row["password_hash"].startswith("scrypt$"):
++        c.execute("update users set password_hash = ? where id = ?", (hash_pw(password), row["id"]))
++        c.commit()
++    return row
++
++
++security = HTTPBasic()
++
++
++def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> None:
++    # Stopgap until the app has real sessions and an admin role.
++    if not (ADMIN_USERNAME and ADMIN_PASSWORD):
++        raise HTTPException(503, "Admin access is not configured")
++    user_ok = secrets.compare_digest(credentials.username.encode(), ADMIN_USERNAME.encode())
++    pass_ok = secrets.compare_digest(credentials.password.encode(), ADMIN_PASSWORD.encode())
++    if not (user_ok and pass_ok):
++        raise HTTPException(401, "Not authorized", headers={"WWW-Authenticate": "Basic"})
+ 
+ 
+ @app.get("/", response_class=HTMLResponse)
+ def home(request: Request):
+-    return templates.TemplateResponse(request, "index.html", {"prices": PRICES})
++    # Advertised prices include the mandatory service fee.
++    prices = {size: cents + SERVICE_FEE_CENTS for size, cents in PRICES.items()}
++    return templates.TemplateResponse(request, "index.html", {"prices": prices, "fee": SERVICE_FEE_CENTS})
+ 
+ 
+ @app.get("/signup", response_class=HTMLResponse)
+@@ -37,7 +110,11 @@ def signup_form(request: Request):
+ 
+ 
+ @app.post("/signup")
+-def signup(email: str = Form(...), password: str = Form(...), name: str = Form("")):
++def signup(request: Request, email: str = Form(...), password: str = Form(...), name: str = Form("")):
++    bucket = f"signup:ip:{client_ip(request)}"
++    if too_many(bucket):
++        return rate_limited()
++    record_attempt(bucket)
+     c = conn()
+     c.execute("insert into users (email, password_hash, name) values (?, ?, ?)", (email, hash_pw(password), name))
+     c.commit()
+@@ -46,31 +123,56 @@ def signup(email: str = Form(...), password: str = Form(...), name: str = Form("
+ 
+ 
+ @app.post("/login")
+-def login(email: str = Form(...), password: str = Form(...)):
+-    row = conn().execute("select * from users where email = ? and password_hash = ?", (email, hash_pw(password))).fetchone()
+-    if not row:
++def login(request: Request, email: str = Form(...), password: str = Form(...)):
++    if not authenticate(request, email, password):
+         return HTMLResponse("Wrong email or password", status_code=401)
+     return RedirectResponse("/", status_code=303)
+ 
+ 
+ @app.post("/order")
+-async def order(
+-    artwork: UploadFile = File(...),
+-    size: str = Form(...),
+-    card_number: str = Form(...),
+-    card_expiry: str = Form(...),
+-    card_cvc: str = Form(...),
+-):
++async def order(artwork: UploadFile = File(...), size: str = Form(...)):
++    import stripe
++
+     dest = UPLOADS / artwork.filename
+     dest.write_bytes(await artwork.read())
+     total = PRICES[size] + SERVICE_FEE_CENTS
+     c = conn()
+-    c.execute(
+-        "insert into orders (artwork, size, card_number, card_expiry, card_cvc, total_cents) values (?, ?, ?, ?, ?, ?)",
+-        (artwork.filename, size, card_number, card_expiry, card_cvc, total),
++    cur = c.execute("insert into orders (artwork, size, total_cents) values (?, ?, ?)", (artwork.filename, size, total))
++    order_id = cur.lastrowid
++    c.commit()
++    # Card details are entered on Stripe Checkout and never reach this server.
++    stripe.api_key = STRIPE_SECRET_KEY
++    base_url = required("PUBLIC_BASE_URL").rstrip("/")
++    session = stripe.checkout.Session.create(
++        mode="payment",
++        line_items=[{
++            "price_data": {
++                "currency": "usd",
++                "unit_amount": total,
++                "product_data": {"name": f"{size.title()} print (includes service fee)"},
++            },
++            "quantity": 1,
++        }],
++        client_reference_id=str(order_id),
++        success_url=f"{base_url}/order/success?session_id={{CHECKOUT_SESSION_ID}}",
++        cancel_url=f"{base_url}/",
+     )
++    c.execute("update orders set stripe_session_id = ? where id = ?", (session.id, order_id))
+     c.commit()
+-    return RedirectResponse(f"/gallery?new={artwork.filename}", status_code=303)
++    return RedirectResponse(session.url, status_code=303)
++
++
++@app.get("/order/success")
++def order_success(session_id: str):
++    import stripe
++
++    stripe.api_key = STRIPE_SECRET_KEY
++    session = stripe.checkout.Session.retrieve(session_id)
++    if session.payment_status == "paid":
++        c = conn()
++        c.execute("update orders set status = 'paid' where stripe_session_id = ?", (session.id,))
++        c.commit()
++    return RedirectResponse("/gallery", status_code=303)
+ 
+ 
+ @app.get("/gallery", response_class=HTMLResponse)
+@@ -79,7 +181,99 @@ def gallery(request: Request):
+     return templates.TemplateResponse(request, "gallery.html", {"files": files})
+ 
+ 
+-@app.get("/admin/orders")
++@app.post("/report")
++def report(item: str = Form(...), reason: str = Form(...)):
++    c = conn()
++    c.execute("insert into reports (item, reason) values (?, ?)", (item[:255], reason[:2000]))
++    c.commit()
++    return RedirectResponse("/gallery?reported=1", status_code=303)
++
++
++@app.get("/account", response_class=HTMLResponse)
++def account(request: Request):
++    return templates.TemplateResponse(request, "account.html")
++
++
++@app.post("/account/delete")
++def delete_account(request: Request, email: str = Form(...), password: str = Form(...), confirm: str = Form("")):
++    if confirm != "yes":
++        return HTMLResponse("Tick the box to confirm deletion.", status_code=400)
++    user = authenticate(request, email, password)
++    if not user:
++        return HTMLResponse("Wrong email or password", status_code=401)
++    c = conn()
++    c.execute("delete from orders where user_id = ?", (user["id"],))
++    c.execute("delete from users where id = ?", (user["id"],))
++    c.commit()
++    return HTMLResponse("Your account and its data have been deleted.")
++
++
++@app.post("/account/export")
++def export_account(request: Request, email: str = Form(...), password: str = Form(...)):
++    user = authenticate(request, email, password)
++    if not user:
++        return HTMLResponse("Wrong email or password", status_code=401)
++    orders = conn().execute("select id, artwork, size, total_cents from orders where user_id = ?", (user["id"],)).fetchall()
++    data = {"email": user["email"], "name": user["name"], "orders": [dict(o) for o in orders]}
++    return JSONResponse(data, headers={"Content-Disposition": "attachment; filename=printpal-data.json"})
++
++
++@app.get("/unsubscribe", response_class=HTMLResponse)
++def unsubscribe_form(request: Request, email: str, token: str):
++    # GET only shows a confirm button, because mail scanners open links.
++    if not valid_unsubscribe_token(email, token):
++        raise HTTPException(400, "Invalid unsubscribe link")
++    return templates.TemplateResponse(request, "unsubscribe.html", {"email": email, "token": token})
++
++
++@app.post("/unsubscribe", response_class=HTMLResponse)
++def unsubscribe(email: str, token: str):
++    # Also serves one-click unsubscribe (RFC 8058): email and token come from the link's query string.
++    if not valid_unsubscribe_token(email, token):
++        raise HTTPException(400, "Invalid unsubscribe link")
++    c = conn()
++    c.execute("insert or ignore into unsubscribes (email) values (?)", (email.lower(),))
++    c.commit()
++    return HTMLResponse("You're unsubscribed from PrintPal promotional emails.")
++
++
++def legal_context() -> dict:
++    return {"contact_email": required("CONTACT_EMAIL"), "postal_address": required("COMPANY_POSTAL_ADDRESS")}
++
++
++@app.get("/privacy", response_class=HTMLResponse)
++def privacy(request: Request):
++    return templates.TemplateResponse(request, "privacy.html", legal_context())
++
++
++@app.get("/terms", response_class=HTMLResponse)
++def terms(request: Request):
++    return templates.TemplateResponse(request, "terms.html", legal_context())
++
++
++@app.get("/refunds", response_class=HTMLResponse)
++def refunds(request: Request):
++    return templates.TemplateResponse(request, "refunds.html", legal_context())
++
++
++@app.get("/dmca", response_class=HTMLResponse)
++def dmca(request: Request):
++    agent = {
++        "agent_name": required("DMCA_AGENT_NAME"),
++        "agent_address": required("DMCA_AGENT_ADDRESS"),
++        "agent_phone": required("DMCA_AGENT_PHONE"),
++        "agent_email": required("DMCA_AGENT_EMAIL"),
++    }
++    return templates.TemplateResponse(request, "dmca.html", agent)
++
++
++@app.get("/admin/orders", dependencies=[Depends(require_admin)])
+ def admin_orders():
+     rows = conn().execute("select * from orders").fetchall()
+     return [dict(r) for r in rows]
++
++
++@app.get("/admin/reports", dependencies=[Depends(require_admin)])
++def admin_reports():
++    rows = conn().execute("select * from reports order by created_at desc").fetchall()
++    return [dict(r) for r in rows]
+diff --git a/app/static/style.css b/app/static/style.css
+index b5df892..c2c5db3 100644
+--- a/app/static/style.css
++++ b/app/static/style.css
+@@ -1 +1,5 @@
+-body{font-family:"Lora",serif;max-width:720px;margin:0 auto;padding:24px} footer{color:#ccc}
++@font-face{font-family:"Lora";src:url("/static/fonts/lora-400.woff2") format("woff2");font-weight:400;font-display:swap}
++@font-face{font-family:"Lora";src:url("/static/fonts/lora-700.woff2") format("woff2");font-weight:700;font-display:swap}
++body{font-family:"Lora",serif;max-width:720px;margin:0 auto;padding:24px} footer{color:#595959}
++label{display:block;margin-top:8px}
++:focus-visible{outline:3px solid #1a4fd6;outline-offset:2px}
+diff --git a/app/templates/account.html b/app/templates/account.html
+new file mode 100644
+index 0000000..be72988
+--- /dev/null
++++ b/app/templates/account.html
+@@ -0,0 +1,23 @@
++{% extends "base.html" %}
++{% block content %}
++<h1>Your account and data</h1>
++
++<h2>Download my data</h2>
++<form action="/account/export" method="post">
++  <label for="export-email">Email</label>
++  <input id="export-email" name="email" type="email" required>
++  <label for="export-password">Password</label>
++  <input id="export-password" name="password" type="password" required>
++  <button>Download my data (JSON)</button>
++</form>
++
++<h2>Delete my account</h2>
++<form action="/account/delete" method="post">
++  <label for="delete-email">Email</label>
++  <input id="delete-email" name="email" type="email" required>
++  <label for="delete-password">Password</label>
++  <input id="delete-password" name="password" type="password" required>
++  <label><input type="checkbox" name="confirm" value="yes" required> I understand this permanently deletes my account.</label>
++  <button>Delete my account</button>
++</form>
++{% endblock %}
+diff --git a/app/templates/base.html b/app/templates/base.html
+index 52f80d6..80845ec 100644
+--- a/app/templates/base.html
++++ b/app/templates/base.html
+@@ -3,11 +3,10 @@
+ <head>
+   <meta charset="utf-8">
+   <title>PrintPal — museum-quality prints of your art</title>
+-  <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;700&display=swap" rel="stylesheet">
+   <link rel="stylesheet" href="/static/style.css">
+ </head>
+ <body>
+   {% block content %}{% endblock %}
+-  <footer>© 2026 PrintPal</footer>
++  <footer>© 2026 PrintPal · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> · <a href="/dmca">Copyright (DMCA)</a> · <a href="/account">Account &amp; data</a></footer>
+ </body>
+ </html>
+diff --git a/app/templates/dmca.html b/app/templates/dmca.html
+new file mode 100644
+index 0000000..f8e0a27
+--- /dev/null
++++ b/app/templates/dmca.html
+@@ -0,0 +1,30 @@
++{# DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++   Agent details come from DMCA_AGENT_* env vars and must match your Copyright Office registration. #}
++{% extends "base.html" %}
++{% block content %}
++<h1>Copyright (DMCA) Policy</h1>
++<p>If you believe content on PrintPal infringes your copyright, send a written notice to our designated agent.</p>
++
++<h2>Designated agent</h2>
++<p>{{ agent_name }}<br>{{ agent_address }}<br>Phone: {{ agent_phone }}<br>Email: {{ agent_email }}</p>
++
++<h2>What your notice must include</h2>
++<ol>
++  <li>Identification of the copyrighted work you claim is infringed.</li>
++  <li>The URL of the infringing material on PrintPal.</li>
++  <li>Your name, address, phone number and email.</li>
++  <li>A statement that you have a good-faith belief the use is not authorized by the copyright owner, its agent, or the law.</li>
++  <li>A statement that the information in the notice is accurate and, under penalty of perjury, that you are authorized to act for the copyright owner.</li>
++  <li>Your physical or electronic signature.</li>
++</ol>
++
++<h2>Counter-notice</h2>
++<p>If your content was removed and you believe it was a mistake or misidentification, send our agent a counter-notice with:
++  identification of the removed material and where it appeared; a statement under penalty of perjury that you have a
++  good-faith belief it was removed by mistake or misidentification; your name, address and phone number; consent to the
++  jurisdiction of the federal district court for your address (or, if outside the U.S., any district where we may be found)
++  and to accept service from the person who sent the notice; and your signature.</p>
++
++<h2>Repeat infringers</h2>
++<p>We terminate the accounts of users who repeatedly infringe copyrights, in appropriate circumstances.</p>
++{% endblock %}
+diff --git a/app/templates/gallery.html b/app/templates/gallery.html
+index 3e73f46..950e7eb 100644
+--- a/app/templates/gallery.html
++++ b/app/templates/gallery.html
+@@ -1,5 +1,22 @@
+ {% extends "base.html" %}
+ {% block content %}
+ <h1>Community gallery</h1>
+-{% for f in files %}<img src="/uploads/{{ f }}" width="240">{% endfor %}
++{% if request.query_params.get("reported") %}<p role="status">Thanks, your report was sent to our team.</p>{% endif %}
++{% for f in files %}
++<figure>
++  <img src="/uploads/{{ f }}" width="240" alt="Community artwork: {{ f }}">
++  <form action="/report" method="post">
++    <input type="hidden" name="item" value="{{ f }}">
++    <label for="reason-{{ loop.index }}">Report this image</label>
++    <select id="reason-{{ loop.index }}" name="reason">
++      <option>Copyright infringement</option>
++      <option>Intimate image shared without consent</option>
++      <option>Offensive or illegal content</option>
++      <option>Other</option>
++    </select>
++    <button>Report</button>
++  </form>
++</figure>
++{% endfor %}
++<p>Copyright owners can also use our <a href="/dmca">DMCA process</a>.</p>
+ {% endblock %}
+diff --git a/app/templates/index.html b/app/templates/index.html
+index 324aa5c..4834b1a 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -1,14 +1,17 @@
+ {% extends "base.html" %}
+ {% block content %}
+ <h1>Your art, printed beautifully.</h1>
+-<img src="/static/hero.jpg">
+-<p>Small ${{ '%.2f' % (prices.small / 100) }} · Large ${{ '%.2f' % (prices.large / 100) }}</p>
++<img src="/static/hero.jpg" alt="TODO(legal-check): describe image">
++<p>Small ${{ '%.2f' % (prices.small / 100) }} · Large ${{ '%.2f' % (prices.large / 100) }}
++  (includes ${{ '%.2f' % (fee / 100) }} service fee)</p>
+ <form action="/order" method="post" enctype="multipart/form-data">
+-  <input type="file" name="artwork" required>
+-  <select name="size"><option value="small">Small</option><option value="large">Large</option></select>
+-  <input name="card_number" placeholder="Card number" autocomplete="cc-number">
+-  <input name="card_expiry" placeholder="MM/YY">
+-  <input name="card_cvc" placeholder="CVC">
++  <label for="artwork">Your artwork</label>
++  <input type="file" id="artwork" name="artwork" required>
++  <label for="size">Print size</label>
++  <select id="size" name="size"><option value="small">Small</option><option value="large">Large</option></select>
++  <p>You'll enter your card on Stripe's secure checkout page.
++    By ordering you agree to the <a href="/terms">Terms</a>, <a href="/refunds">Refund Policy</a>
++    and <a href="/privacy">Privacy Policy</a>, and confirm you have the rights to the artwork you upload.</p>
+   <button>Order print</button>
+ </form>
+ <a href="/signup">Create an account</a>
+diff --git a/app/templates/privacy.html b/app/templates/privacy.html
+new file mode 100644
+index 0000000..ad5b6b7
+--- /dev/null
++++ b/app/templates/privacy.html
+@@ -0,0 +1,56 @@
++{# DRAFT generated by /legal-check. Have a lawyer review before relying on it. #}
++{% extends "base.html" %}
++{% block content %}
++<h1>Privacy Policy</h1>
++<p>Effective date: TODO(legal-check): effective date. We review this policy at least every 12 months.</p>
++<p>PrintPal ("we") is operated by TODO(legal-check): legal company name.</p>
++
++<h2>What we collect</h2>
++<ul>
++  <li>Account details: name, email address and password (stored as a salted hash).</li>
++  <li>Orders: the artwork you upload, print size, order total and payment status.</li>
++  <li>Reports you send about gallery images.</li>
++  <li>Technical data our server receives with each request, such as your IP address.</li>
++</ul>
++<p>We do not see or store your card details: payments are handled by Stripe.</p>
++
++<h2>How we use it</h2>
++<ul>
++  <li>To make and deliver your prints and process payments.</li>
++  <li>To run your account and keep the service secure (for example, limiting login attempts).</li>
++  <li>To send promotional emails, which you can unsubscribe from at any time via the link in each email.</li>
++  <li>To show uploaded artwork in the public community gallery.</li>
++</ul>
++
++<h2>Who we share it with</h2>
++<ul>
++  <li>Stripe (payments).</li>
++  <li>Mailgun (sending email).</li>
++  <li>TODO(legal-check): hosting provider and print/fulfilment partners.</li>
++</ul>
++<p>We do not sell your personal information or share it for cross-context behavioral advertising.</p>
++
++<h2>Public gallery</h2>
++<p>Artwork you upload when ordering is shown publicly in our community gallery.</p>
++
++<h2>Cookies</h2>
++<p>We do not use analytics or advertising cookies.</p>
++
++<h2>Your rights</h2>
++<p>You can download your data or delete your account on the <a href="/account">Account &amp; data</a> page,
++  or contact us at {{ contact_email }}. We keep order records needed for tax and accounting:
++  TODO(legal-check): list what is kept and for how long.</p>
++
++<h2>California residents</h2>
++<p>In the last 12 months we collected identifiers (name, email, IP address), commercial information
++  (orders), and user content (uploaded artwork), from you directly, for the purposes above, and disclosed
++  them to the service providers listed above. You have the right to know, delete and correct your personal
++  information, and to not be discriminated against for using these rights. We do not sell or share
++  personal information. Use the <a href="/account">Account &amp; data</a> page or email {{ contact_email }}.</p>
++
++<h2>Children</h2>
++<p>PrintPal is not directed to children under 13, and we do not knowingly collect their personal information.</p>
++
++<h2>Contact</h2>
++<p>{{ contact_email }} · {{ postal_address }}</p>
++{% endblock %}
+diff --git a/app/templates/refunds.html b/app/templates/refunds.html
+new file mode 100644
+index 0000000..cc419ba
+--- /dev/null
++++ b/app/templates/refunds.html
+@@ -0,0 +1,15 @@
++{# DRAFT generated by /legal-check. Have a lawyer review before relying on it. #}
++{% extends "base.html" %}
++{% block content %}
++<h1>Refund &amp; Cancellation Policy</h1>
++<p>Prices shown include the service fee. Taxes and shipping, if any, are shown at checkout.</p>
++
++<h2>Cancelling an order</h2>
++<p>TODO(legal-check): until when an order can be cancelled (e.g. before printing starts) and how.</p>
++
++<h2>Refunds</h2>
++<p>TODO(legal-check): refund window and conditions (e.g. damaged or misprinted items), and whether the service fee is refunded.</p>
++
++<h2>How to request a refund</h2>
++<p>Email {{ contact_email }} with your order details.</p>
++{% endblock %}
+diff --git a/app/templates/signup.html b/app/templates/signup.html
+index 9f10455..048672e 100644
+--- a/app/templates/signup.html
++++ b/app/templates/signup.html
+@@ -2,9 +2,14 @@
+ {% block content %}
+ <h1>Create account</h1>
+ <form action="/signup" method="post">
+-  <input name="name" placeholder="Name">
+-  <input name="email" type="email" placeholder="Email">
+-  <input name="password" type="password" placeholder="Password">
++  <label for="name">Name</label>
++  <input id="name" name="name">
++  <label for="email">Email</label>
++  <input id="email" name="email" type="email">
++  <label for="password">Password</label>
++  <input id="password" name="password" type="password">
++  <p>By signing up you agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
++    We'll also send you promotional emails; you can unsubscribe from any of them.</p>
+   <button>Sign up</button>
+ </form>
+ {% endblock %}
+diff --git a/app/templates/terms.html b/app/templates/terms.html
+new file mode 100644
+index 0000000..b9b9cbd
+--- /dev/null
++++ b/app/templates/terms.html
+@@ -0,0 +1,36 @@
++{# DRAFT generated by /legal-check. Have a lawyer review before relying on it. #}
++{% extends "base.html" %}
++{% block content %}
++<h1>Terms of Service</h1>
++<p>Effective date: TODO(legal-check): effective date. PrintPal is operated by TODO(legal-check): legal company name.</p>
++
++<h2>Using PrintPal</h2>
++<p>You must be able to form a binding contract to use PrintPal. Don't use it for anything unlawful,
++  or to upload content that is illegal, infringing, harassing, or sexual content involving minors.</p>
++
++<h2>Your uploads</h2>
++<p>You must own or have the rights to any artwork you upload. You keep ownership; you give us a license to
++  store, print and display it in the public community gallery. We may remove any content that breaks these
++  terms. Copyright owners can use our <a href="/dmca">DMCA process</a>, and we terminate repeat infringers.</p>
++
++<h2>Reports</h2>
++<p>Anyone can report a gallery image. We review reports promptly and remove content that breaks these terms,
++  including intimate images shared without consent within 48 hours of a valid request.
++  Contact: {{ contact_email }}.</p>
++
++<h2>Orders and refunds</h2>
++<p>Prices include our service fee. Refunds and cancellations follow our <a href="/refunds">Refund Policy</a>.</p>
++
++<h2>Disclaimer</h2>
++<p>PrintPal is provided "as is" and "as available", without warranties of any kind, to the extent the law allows.</p>
++
++<h2>Limitation of liability</h2>
++<p>To the extent the law allows, we are not liable for indirect or consequential damages, and our total
++  liability is limited to the amount you paid us for the order in question.</p>
++
++<h2>Governing law</h2>
++<p>TODO(legal-check): governing law and venue.</p>
++
++<h2>Contact</h2>
++<p>{{ contact_email }} · {{ postal_address }}</p>
++{% endblock %}
+diff --git a/app/templates/unsubscribe.html b/app/templates/unsubscribe.html
+new file mode 100644
+index 0000000..3fee31c
+--- /dev/null
++++ b/app/templates/unsubscribe.html
+@@ -0,0 +1,8 @@
++{% extends "base.html" %}
++{% block content %}
++<h1>Unsubscribe</h1>
++<form action="/unsubscribe?email={{ email | urlencode }}&token={{ token | urlencode }}" method="post">
++  <p>Stop sending promotional emails to {{ email }}?</p>
++  <button>Unsubscribe</button>
++</form>
++{% endblock %}
+diff --git a/migrations/001_remove_card_data.sql b/migrations/001_remove_card_data.sql
+new file mode 100644
+index 0000000..8e49775
+--- /dev/null
++++ b/migrations/001_remove_card_data.sql
+@@ -0,0 +1,9 @@
++-- Existing printpal.db files still have card columns from the old schema.
++-- Card numbers and CVCs must be deleted, never archived or backed up.
++-- Run once against the production database (SQLite 3.35+), then delete old backups that contain them.
++update orders set card_number = null, card_expiry = null, card_cvc = null;
++alter table orders drop column card_number;
++alter table orders drop column card_expiry;
++alter table orders drop column card_cvc;
++alter table orders add column status text default 'pending';
++alter table orders add column stripe_session_id text;
+diff --git a/requirements.txt b/requirements.txt
+index ab8d686..e42c243 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -3,4 +3,5 @@ uvicorn==0.37.0
+ jinja2==3.1.6
+ python-multipart==0.0.20
+ httpx==0.28.1
++stripe>=12.0
+ pytest==8.4.2

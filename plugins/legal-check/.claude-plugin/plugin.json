@@ -1,11 +1,24 @@
 {
   "name": "legal-check",
   "displayName": "Legal Check",
-  "version": "0.1.0",
-  "description": "Audit a web app for COPPA, Google Fonts (GDPR), session replay (CIPA), CAN-SPAM, California auto-renewal, and DMCA traps, then fix what code can fix. Not legal advice.",
-  "author": { "name": "Shogo Kikuchi", "url": "https://github.com/Shogo-nfrealmusic" },
+  "version": "0.2.0",
+  "description": "Audit a vibe-coded web or mobile app for what could get it sued, fined, breached or rejected (exposed keys, open databases, ad pixels, consent, COPPA, CAN-SPAM, TCPA, FTC claims, auto-renewal, DMCA, UGC, AI disclosure, ADA) and fix what code can fix in your stack. Not legal advice.",
+  "author": {
+    "name": "Shogo Kikuchi",
+    "url": "https://github.com/Shogo-nfrealmusic"
+  },
   "homepage": "https://github.com/Shogo-nfrealmusic/ship-legal",
   "repository": "https://github.com/Shogo-nfrealmusic/ship-legal",
   "license": "MIT",
-  "keywords": ["legal", "compliance", "coppa", "gdpr", "can-spam", "dmca", "vibe-coding"]
+  "keywords": [
+    "legal",
+    "compliance",
+    "security",
+    "privacy",
+    "accessibility",
+    "coppa",
+    "gdpr",
+    "ccpa",
+    "vibe-coding"
+  ]
 }

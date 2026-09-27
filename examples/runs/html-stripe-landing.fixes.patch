@@ -1,0 +1,521 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..495bc25
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,2 @@
++AIRTABLE_TOKEN=
++AIRTABLE_BASE_ID=
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..2cef73e
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,3 @@
++.env
++.env.*
++!.env.example
+diff --git a/index.html b/index.html
+index 91d8142..f6f3b2e 100644
+--- a/index.html
++++ b/index.html
+@@ -4,41 +4,19 @@
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+   <title>FocusFlow — deep work timer for Mac</title>
+-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;700&display=swap" rel="stylesheet">
+   <link rel="stylesheet" href="styles.css">
+-  <!-- Google tag (gtag.js) -->
+-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-ABC123XYZ"></script>
+-  <script>
+-    window.dataLayer = window.dataLayer || [];
+-    function gtag(){dataLayer.push(arguments);}
+-    gtag('js', new Date());
+-    gtag('config', 'G-ABC123XYZ');
+-    gtag('config', 'AW-987654321');
+-  </script>
+-  <!-- TikTok Pixel -->
+-  <script>
+-    !function (w, d, t) { w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track"];
+-    ttq.load=function(e){var s=d.createElement("script");s.async=!0;s.src="https://analytics.tiktok.com/i18n/pixel/events.js?sdkid="+e;d.head.appendChild(s)};
+-    ttq.load('CABCDEF123'); ttq.page(); }(window, document, 'ttq');
+-  </script>
+-  <!-- Hotjar -->
+-  <script>
+-    (function(h,o,t,j,a,r){h.hj=h.hj||function(){(h.hj.q=h.hj.q||[]).push(arguments)};
+-    h._hjSettings={hjid:3456789,hjsv:6};a=o.getElementsByTagName('head')[0];
+-    r=o.createElement('script');r.async=1;r.src=t+h._hjSettings.hjid+j+h._hjSettings.hjsv;a.appendChild(r);
+-    })(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv=');
+-  </script>
++  <!-- Google tag, TikTok Pixel and Hotjar load from js/consent.js only after "Accept". -->
+ </head>
+ <body>
+   <header>
+-    <img src="img/logo.svg" class="logo">
++    <img src="img/logo.svg" class="logo" alt="FocusFlow">
+     <nav><a href="#pricing">Pricing</a></nav>
+   </header>
+ 
+   <section class="hero">
+     <h1>Get 4 hours of deep work, every day.</h1>
+     <p>The #1 focus app for Mac. Used by 120,000 developers at Google, Stripe and Apple.</p>
+-    <img src="img/screenshot.png">
++    <img src="img/screenshot.png" alt="Screenshot of the FocusFlow app on Mac">
+   </section>
+ 
+   <section class="reviews">
+@@ -49,19 +27,54 @@
+   <section id="pricing">
+     <h2>Pro</h2>
+     <p class="price">$9<small>/mo</small></p>
+-    <a class="btn" href="https://buy.stripe.com/test_eVa5kE0Zz9dK0HS000">Subscribe</a>
++    <!-- TODO(legal-check): say when a cancellation takes effect (end of period? immediately?) per your Stripe settings. -->
++    <p class="renewal-terms" id="renewal-terms">
++      $9 is charged to your card every month, starting today, and your subscription renews
++      automatically until you cancel. You can cancel online at any time from
++      <a id="manage-subscription" data-portal-url="">Manage or cancel subscription</a>.
++      See our <a href="terms.html#subscriptions">subscription and refund terms</a>.
++    </p>
++    <label class="consent">
++      <input type="checkbox" id="renewal-consent">
++      I agree to the automatic renewal terms above.
++    </label>
++    <a class="btn" id="subscribe-link" aria-disabled="true" aria-describedby="renewal-terms"
++       href="https://buy.stripe.com/test_eVa5kE0Zz9dK0HS000">Subscribe</a>
++    <p class="fineprint">By subscribing you agree to the <a href="terms.html">Terms</a> and
++      <a href="privacy.html">Privacy Policy</a>.</p>
+   </section>
+ 
+   <section class="newsletter">
+     <h3>Get focus tips every week</h3>
+     <form id="newsletter">
+-      <input type="email" name="email" placeholder="you@example.com" required>
+-      <input type="tel" name="phone" placeholder="Phone (for SMS tips)">
+-      <div class="btn" onclick="subscribe()">Join</div>
++      <label for="nl-email">Email</label>
++      <input type="email" id="nl-email" name="email" placeholder="you@example.com" required>
++      <label for="nl-phone">Phone (optional, for SMS tips)</label>
++      <input type="tel" id="nl-phone" name="phone">
++      <!-- Keep this wording in sync with SMS_CONSENT_TEXT in netlify/functions/subscribe.js -->
++      <label class="consent">
++        <input type="checkbox" name="smsConsent" value="yes">
++        I agree to receive recurring marketing text messages from FocusFlow at this number.
++        Consent is not a condition of purchase. Msg &amp; data rates may apply. Reply STOP
++        to cancel, HELP for help. See <a href="terms.html">Terms</a> and
++        <a href="privacy.html">Privacy Policy</a>.
++      </label>
++      <button type="submit" class="btn">Join</button>
++      <p class="fineprint">By joining you agree to the <a href="terms.html">Terms</a> and
++        <a href="privacy.html">Privacy Policy</a>.</p>
++      <p class="form-status" role="status"></p>
+     </form>
+   </section>
+ 
+-  <footer>© 2026 FocusFlow</footer>
++  <footer>
++    © 2026 FocusFlow ·
++    <a href="privacy.html">Privacy Policy</a> ·
++    <a href="terms.html">Terms</a> ·
++    <a href="terms.html#refunds">Refunds</a> ·
++    <a href="privacy.html#choices">Your Privacy Choices</a> ·
++    <button type="button" class="linklike" data-cookie-settings>Cookie settings</button>
++  </footer>
++  <script src="js/consent.js"></script>
+   <script src="js/app.js"></script>
+ </body>
+ </html>
+diff --git a/js/app.js b/js/app.js
+index 811c11b..00149e5 100644
+--- a/js/app.js
++++ b/js/app.js
+@@ -1,13 +1,42 @@
+-// Newsletter + SMS tips signup. Sends straight to our Airtable base.
+-const AIRTABLE_TOKEN = "patFAKEdemo00000000.0000000000000000000000000000000000000000000000000000000000000000";
+-
+-async function subscribe() {
+-  const form = document.getElementById("newsletter");
++// Newsletter + SMS tips signup. Posts to our serverless function, which holds the Airtable token.
++async function subscribe(event) {
++  event.preventDefault();
++  const form = event.target;
++  const status = form.querySelector(".form-status");
+   const data = Object.fromEntries(new FormData(form));
+-  await fetch("https://api.airtable.com/v0/appFAKE123/Subscribers", {
++  const smsConsent = data.smsConsent === "yes" && Boolean(data.phone);
++  const res = await fetch("/.netlify/functions/subscribe", {
+     method: "POST",
+-    headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}`, "Content-Type": "application/json" },
+-    body: JSON.stringify({ fields: { Email: data.email, Phone: data.phone, Source: "landing" } }),
++    headers: { "Content-Type": "application/json" },
++    // The phone number is only sent when the SMS consent box is ticked.
++    body: JSON.stringify({ email: data.email, phone: smsConsent ? data.phone : "", smsConsent }),
+   });
+-  form.innerHTML = "<p>You're in! Watch your inbox (and your texts).</p>";
++  if (!res.ok) {
++    status.textContent = "Something went wrong. Please try again.";
++    return;
++  }
++  form.innerHTML = smsConsent
++    ? "<p>You're in! Watch your inbox (and your texts).</p>"
++    : "<p>You're in! Watch your inbox.</p>";
++}
++document.getElementById("newsletter").addEventListener("submit", subscribe);
++
++// Subscribe works only after the auto-renewal box is ticked, and only when the
++// self-serve cancel link (Stripe customer portal) is configured.
++const renewalBox = document.getElementById("renewal-consent");
++const subscribeLink = document.getElementById("subscribe-link");
++const manageLink = document.getElementById("manage-subscription");
++const portalUrl = manageLink.dataset.portalUrl;
++const isLocal = ["localhost", "127.0.0.1", ""].includes(location.hostname);
++if (portalUrl) manageLink.href = portalUrl;
++else if (!isLocal) console.error("legal-check: set data-portal-url on #manage-subscription before selling subscriptions.");
++
++function subscribeReady() {
++  return renewalBox.checked && (Boolean(portalUrl) || isLocal);
+ }
++renewalBox.addEventListener("change", () => {
++  subscribeLink.setAttribute("aria-disabled", String(!subscribeReady()));
++});
++subscribeLink.addEventListener("click", (e) => {
++  if (!subscribeReady()) e.preventDefault();
++});
+diff --git a/js/consent.js b/js/consent.js
+new file mode 100644
+index 0000000..c5d88b0
+--- /dev/null
++++ b/js/consent.js
+@@ -0,0 +1,86 @@
++// Consent for analytics (GA4), session replay (Hotjar) and ad pixels (Google Ads, TikTok).
++// Nothing loads until the visitor clicks "Accept". Ad pixels are also skipped when the
++// browser sends Global Privacy Control or the visitor opted out of "sharing".
++(function () {
++  var CONSENT_KEY = "ff-consent"; // "accepted" | "declined"
++  var ADS_OPTOUT_KEY = "ff-ads-optout"; // "1" = Do Not Sell or Share
++  var loaded = false;
++
++  function get(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
++  function set(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
++
++  function adsAllowed() {
++    return navigator.globalPrivacyControl !== true && get(ADS_OPTOUT_KEY) !== "1";
++  }
++
++  function loadGtag(withAds) {
++    var s = document.createElement("script");
++    s.async = true;
++    s.src = "https://www.googletagmanager.com/gtag/js?id=G-ABC123XYZ";
++    document.head.appendChild(s);
++    window.dataLayer = window.dataLayer || [];
++    window.gtag = function () { dataLayer.push(arguments); };
++    gtag("js", new Date());
++    gtag("config", "G-ABC123XYZ");
++    if (withAds) gtag("config", "AW-987654321");
++  }
++
++  function loadTikTok() {
++    !function (w, d, t) { w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track"];
++    ttq.load=function(e){var s=d.createElement("script");s.async=!0;s.src="https://analytics.tiktok.com/i18n/pixel/events.js?sdkid="+e;d.head.appendChild(s)};
++    ttq.load('CABCDEF123'); ttq.page(); }(window, document, 'ttq');
++  }
++
++  function loadHotjar() {
++    (function(h,o,t,j,a,r){h.hj=h.hj||function(){(h.hj.q=h.hj.q||[]).push(arguments)};
++    h._hjSettings={hjid:3456789,hjsv:6};a=o.getElementsByTagName('head')[0];
++    r=o.createElement('script');r.async=1;r.src=t+h._hjSettings.hjid+j+h._hjSettings.hjsv;a.appendChild(r);
++    })(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv=');
++  }
++
++  function loadTrackers() {
++    if (loaded) return;
++    loaded = true;
++    var ads = adsAllowed();
++    loadGtag(ads);
++    loadHotjar();
++    if (ads) loadTikTok();
++  }
++
++  var banner = document.createElement("div");
++  banner.className = "consent-banner";
++  banner.setAttribute("role", "dialog");
++  banner.setAttribute("aria-label", "Cookie choices");
++  banner.hidden = true;
++  banner.innerHTML =
++    '<p>We use cookies for analytics, session recordings and ads to improve FocusFlow and ' +
++    'measure our marketing. See our <a href="privacy.html">Privacy Policy</a>.</p>' +
++    '<button type="button" class="btn" data-consent="accepted">Accept</button> ' +
++    '<button type="button" class="btn" data-consent="declined">Decline</button>';
++  document.body.appendChild(banner);
++
++  function choose(value) {
++    var previous = get(CONSENT_KEY);
++    set(CONSENT_KEY, value);
++    banner.hidden = true;
++    if (value === "accepted") loadTrackers();
++    // Scripts that already ran can't be unloaded; a reload stops them.
++    else if (previous === "accepted" && loaded) location.reload();
++  }
++
++  document.addEventListener("click", function (e) {
++    var target = e.target.closest("[data-consent], [data-cookie-settings], [data-optout-sharing]");
++    if (!target) return;
++    if (target.hasAttribute("data-consent")) choose(target.getAttribute("data-consent"));
++    else if (target.hasAttribute("data-cookie-settings")) banner.hidden = false;
++    else {
++      set(ADS_OPTOUT_KEY, "1");
++      var status = document.getElementById("optout-status");
++      if (status) status.textContent = "Done. We won't load advertising pixels in this browser.";
++      if (loaded) location.reload();
++    }
++  });
++
++  if (get(CONSENT_KEY) === "accepted") loadTrackers();
++  else if (!get(CONSENT_KEY)) banner.hidden = false;
++})();
+diff --git a/netlify/functions/subscribe.js b/netlify/functions/subscribe.js
+new file mode 100644
+index 0000000..4d37ccc
+--- /dev/null
++++ b/netlify/functions/subscribe.js
+@@ -0,0 +1,47 @@
++// Newsletter + SMS tips signup. Keeps the Airtable token on the server (env vars below).
++// Public by design (newsletter form): no login, so input is validated and size-limited.
++const SMS_CONSENT_TEXT =
++  "I agree to receive recurring marketing text messages from FocusFlow at this number. " +
++  "Consent is not a condition of purchase. Msg & data rates may apply. Reply STOP to " +
++  "cancel, HELP for help.";
++
++export default async (req) => {
++  if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
++
++  const token = process.env.AIRTABLE_TOKEN;
++  const baseId = process.env.AIRTABLE_BASE_ID;
++  if (!token || !baseId) return new Response("Server not configured", { status: 500 });
++
++  const raw = await req.text();
++  if (raw.length > 2000) return new Response("Too large", { status: 413 });
++  let body;
++  try { body = JSON.parse(raw); } catch { return new Response("Bad request", { status: 400 }); }
++
++  const email = String(body.email || "").trim();
++  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
++    return new Response("Invalid email", { status: 400 });
++  }
++  const smsConsent = body.smsConsent === true;
++  const phone = smsConsent ? String(body.phone || "").trim() : "";
++  if (smsConsent && !/^\+?[0-9\s().-]{7,20}$/.test(phone)) {
++    return new Response("Invalid phone", { status: 400 });
++  }
++
++  const fields = { Email: email, Source: "landing" };
++  if (smsConsent) {
++    // Record of written consent for marketing texts (TCPA).
++    Object.assign(fields, {
++      Phone: phone,
++      SmsConsentAt: new Date().toISOString(),
++      SmsConsentText: SMS_CONSENT_TEXT,
++    });
++  }
++
++  const res = await fetch(`https://api.airtable.com/v0/${baseId}/Subscribers`, {
++    method: "POST",
++    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
++    body: JSON.stringify({ fields }),
++  });
++  if (!res.ok) return new Response("Upstream error", { status: 502 });
++  return new Response(null, { status: 204 });
++};
+diff --git a/privacy.html b/privacy.html
+new file mode 100644
+index 0000000..02c3d92
+--- /dev/null
++++ b/privacy.html
+@@ -0,0 +1,96 @@
++<!DOCTYPE html>
++<!-- DRAFT generated by /legal-check. Have a lawyer review before relying on it. -->
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>Privacy Policy — FocusFlow</title>
++  <link rel="stylesheet" href="styles.css">
++</head>
++<body>
++  <main class="legal">
++    <h1>Privacy Policy</h1>
++    <p>Effective date: TODO(legal-check): date. We review this policy at least every 12 months.</p>
++    <p>This policy explains what FocusFlow ("we", operated by TODO(legal-check): legal
++      entity name) collects on this website, why, who receives it, and your choices.</p>
++
++    <h2>What we collect</h2>
++    <ul>
++      <li><strong>Newsletter sign-up:</strong> your email address, and your phone number only
++        if you tick the SMS consent box. With SMS consent we also record when you agreed and
++        the wording you agreed to.</li>
++      <li><strong>Subscriptions:</strong> payment is handled by Stripe on its own checkout
++        page. We don't receive or store your full card number.</li>
++      <li><strong>Usage data (only if you click "Accept"):</strong> pages viewed, clicks,
++        device and browser information, IP address, and cookie identifiers, collected by
++        the analytics, session-recording and advertising tools below.</li>
++    </ul>
++
++    <h2>Who receives it</h2>
++    <ul>
++      <li><strong>Airtable</strong> stores newsletter sign-ups.</li>
++      <li><strong>Stripe</strong> processes payments and subscriptions.</li>
++      <li><strong>Google Analytics</strong> measures site usage.</li>
++      <li><strong>Hotjar</strong> records sessions (see below).</li>
++      <li><strong>Google Ads</strong> and <strong>TikTok</strong> measure our ads and may use
++        the data for ad targeting.</li>
++      <li>TODO(legal-check): the provider you use to send emails and text messages.</li>
++    </ul>
++
++    <h2>Session recording</h2>
++    <p>If you click "Accept", Hotjar records how you use this site (mouse movements, clicks,
++      scrolling, pages) so we can improve it. TODO(legal-check): confirm in the Hotjar
++      dashboard which inputs are masked and describe it here. If you click "Decline",
++      nothing is recorded.</p>
++
++    <h2>Cookies and your choices</h2>
++    <p>Analytics, session recording and ad pixels load only after you click "Accept" in our
++      cookie banner. You can change your choice at any time:
++      <button type="button" class="linklike" data-cookie-settings>Cookie settings</button>.
++      If your browser sends Global Privacy Control, we don't load advertising pixels.</p>
++
++    <h2 id="choices">Your Privacy Choices (Do Not Sell or Share My Personal Information)</h2>
++    <p>Sending data to Google Ads and TikTok for targeted advertising may count as "sharing"
++      under California law. You can opt out in this browser:</p>
++    <p><button type="button" class="btn" data-optout-sharing>Opt out of sale/sharing</button></p>
++    <p id="optout-status" role="status"></p>
++
++    <h2>Emails and text messages</h2>
++    <p>You can unsubscribe from emails using the link in each email. Reply STOP to any text to
++      stop texts, HELP for help.</p>
++
++    <h2>Your rights</h2>
++    <p>You can ask us to access, correct, delete, or export your personal information, and
++      to stop selling or sharing it. Email TODO(legal-check): contact email. We won't treat
++      you differently for using these rights.</p>
++
++    <h2>California residents</h2>
++    <p>In the last 12 months we collected: identifiers (email, phone, IP address, cookie
++      IDs), commercial information (subscription purchases, via Stripe), and internet
++      activity (usage and session recordings, only after consent). Sources: you and your
++      device. Purposes: sending the newsletter and texts you asked for, providing
++      subscriptions, improving the site, and measuring and targeting ads. Recipients: the
++      providers listed above. We do not sell personal information for money; ad pixels may
++      count as "sharing" — see Your Privacy Choices above. You have the rights to know,
++      delete, correct, and opt out of sale/sharing.</p>
++
++    <h2>Children</h2>
++    <p>FocusFlow is not directed to children under 13, and we don't knowingly collect their
++      personal information.</p>
++
++    <h2>Retention</h2>
++    <p>TODO(legal-check): how long you keep sign-ups, payment records and recordings.</p>
++
++    <h2>Contact</h2>
++    <p>TODO(legal-check): contact email and postal address.</p>
++  </main>
++  <footer>
++    © 2026 FocusFlow ·
++    <a href="index.html">Home</a> ·
++    <a href="terms.html">Terms</a> ·
++    <a href="privacy.html#choices">Your Privacy Choices</a> ·
++    <button type="button" class="linklike" data-cookie-settings>Cookie settings</button>
++  </footer>
++  <script src="js/consent.js"></script>
++</body>
++</html>
+diff --git a/styles.css b/styles.css
+index d8d5711..0e613dd 100644
+--- a/styles.css
++++ b/styles.css
+@@ -1,7 +1,17 @@
++/* Self-hosted DM Sans. TODO(legal-check): download dm-sans-400.woff2 and dm-sans-700.woff2 into fonts/. */
++@font-face { font-family: "DM Sans"; src: url("fonts/dm-sans-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
++@font-face { font-family: "DM Sans"; src: url("fonts/dm-sans-700.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+ body { font-family: "DM Sans", sans-serif; margin: 0; color: #222; }
+-.hero, #pricing, .newsletter, .reviews { max-width: 720px; margin: 48px auto; padding: 0 16px; }
+-.btn { display: inline-block; background: #6366f1; color: #fff; padding: 12px 20px; border-radius: 10px; text-decoration: none; cursor: pointer; }
++.hero, #pricing, .newsletter, .reviews, .legal { max-width: 720px; margin: 48px auto; padding: 0 16px; }
++.btn { display: inline-block; background: #4f46e5; color: #fff; padding: 12px 20px; border: 0; border-radius: 10px; font: inherit; text-decoration: none; cursor: pointer; }
++.btn[aria-disabled="true"] { background: #6b7280; cursor: not-allowed; }
+ .price { font-size: 40px; font-weight: 700; }
+-footer { color: #bbb; font-size: 12px; text-align: center; }
+-*:focus { outline: none; }
+-.reviews .review { color: #c7c7c7; }
++footer { color: #666; font-size: 12px; text-align: center; }
++footer a, .linklike { color: #444; }
++.linklike { background: none; border: 0; padding: 0; font: inherit; text-decoration: underline; cursor: pointer; }
++:focus-visible { outline: 3px solid #4f46e5; outline-offset: 2px; }
++.reviews .review { color: #555; }
++.newsletter label { display: block; margin-top: 8px; }
++.consent { display: block; margin: 12px 0; font-size: 14px; }
++.fineprint, .renewal-terms { font-size: 14px; color: #444; }
++.consent-banner { position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 640px; margin: 0 auto; background: #fff; color: #222; border: 1px solid #ccc; border-radius: 12px; padding: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+diff --git a/terms.html b/terms.html
+new file mode 100644
+index 0000000..646313c
+--- /dev/null
++++ b/terms.html
+@@ -0,0 +1,59 @@
++<!DOCTYPE html>
++<!-- DRAFT generated by /legal-check. Have a lawyer review before relying on it. -->
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>Terms of Service — FocusFlow</title>
++  <link rel="stylesheet" href="styles.css">
++</head>
++<body>
++  <main class="legal">
++    <h1>Terms of Service</h1>
++    <p>Effective date: TODO(legal-check): date.</p>
++    <p>These terms are an agreement between you and TODO(legal-check): legal entity name
++      ("FocusFlow", "we"). By subscribing or joining our newsletter you agree to them and to
++      our <a href="privacy.html">Privacy Policy</a>.</p>
++
++    <h2>Using FocusFlow</h2>
++    <p>You may use FocusFlow only in line with the law and these terms. Don't misuse the
++      service, try to break or bypass its security, or resell it without our permission.</p>
++
++    <h2 id="subscriptions">Subscriptions and automatic renewal</h2>
++    <p>FocusFlow Pro costs $9 per month. Your subscription renews automatically every month
++      and your card is charged $9 each month until you cancel. You can cancel online at any
++      time from "Manage or cancel subscription" on our pricing section.
++      TODO(legal-check): when a cancellation takes effect, per your Stripe settings.</p>
++
++    <h2 id="refunds">Refunds and cancellation</h2>
++    <p>TODO(legal-check): your refund rule (refund window, or "no refunds for partial
++      months") and how to request one (contact email).</p>
++
++    <h2>Disclaimer of warranties</h2>
++    <p>FocusFlow is provided "as is" and "as available", without warranties of any kind,
++      express or implied, to the fullest extent permitted by law.</p>
++
++    <h2>Limitation of liability</h2>
++    <p>To the fullest extent permitted by law, we are not liable for indirect, incidental,
++      special, consequential, or punitive damages, and our total liability for any claim is
++      limited to the amount you paid us in the 12 months before the claim.</p>
++
++    <h2>Changes</h2>
++    <p>We may update these terms. We'll post the new version here with a new effective date.</p>
++
++    <h2>Governing law</h2>
++    <p>TODO(legal-check): governing law and venue.</p>
++
++    <h2>Contact</h2>
++    <p>TODO(legal-check): contact email.</p>
++  </main>
++  <footer>
++    © 2026 FocusFlow ·
++    <a href="index.html">Home</a> ·
++    <a href="privacy.html">Privacy Policy</a> ·
++    <a href="privacy.html#choices">Your Privacy Choices</a> ·
++    <button type="button" class="linklike" data-cookie-settings>Cookie settings</button>
++  </footer>
++  <script src="js/consent.js"></script>
++</body>
++</html>

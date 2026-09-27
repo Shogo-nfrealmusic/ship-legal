@@ -1,0 +1,1304 @@
+diff --git a/.env.example b/.env.example
+index e0d9133..77024be 100644
+--- a/.env.example
++++ b/.env.example
+@@ -5,3 +5,15 @@ STRIPE_SECRET_KEY=sk_test_xxx
+ STRIPE_PRICE_PRO=price_xxx
+ BLOB_READ_WRITE_TOKEN=vercel_blob_xxx
+ NEXT_PUBLIC_APP_URL=http://localhost:3000
++# Bearer token for POST /api/waitlist/launch
++ADMIN_API_SECRET=
++# Long random string used to sign unsubscribe links
++UNSUBSCRIBE_SECRET=
++# Required in production: legal pages and marketing email throw without them
++COMPANY_POSTAL_ADDRESS=
++CONTACT_EMAIL=
++LEGAL_EFFECTIVE_DATE=
++DMCA_AGENT_NAME=
++DMCA_AGENT_ADDRESS=
++DMCA_AGENT_PHONE=
++DMCA_AGENT_EMAIL=
+diff --git a/app/api/account/export/route.ts b/app/api/account/export/route.ts
+new file mode 100644
+index 0000000..77a2338
+--- /dev/null
++++ b/app/api/account/export/route.ts
+@@ -0,0 +1,16 @@
++import { NextResponse } from "next/server";
++import { currentUserId, db } from "@/lib/db";
++
++// GET /api/account/export — the signed-in user's own data as a JSON download.
++export async function GET() {
++  const user = db.findById(currentUserId());
++  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
++
++  const { passwordHash: _passwordHash, ...data } = user;
++  return new NextResponse(JSON.stringify(data, null, 2), {
++    headers: {
++      "Content-Type": "application/json",
++      "Content-Disposition": 'attachment; filename="vibely-data.json"',
++    },
++  });
++}
+diff --git a/app/api/account/route.ts b/app/api/account/route.ts
+new file mode 100644
+index 0000000..f3c69fe
+--- /dev/null
++++ b/app/api/account/route.ts
+@@ -0,0 +1,14 @@
++import { NextResponse } from "next/server";
++import { del } from "@vercel/blob";
++import { currentUserId, db } from "@/lib/db";
++
++// DELETE /api/account — deletes the signed-in user, their profile picture and blocks.
++export async function DELETE() {
++  const id = currentUserId();
++  const user = db.findById(id);
++  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
++
++  if (user.avatarUrl) await del(user.avatarUrl);
++  db.deleteUser(id);
++  return NextResponse.json({ deleted: true });
++}
+diff --git a/app/api/billing/portal/route.ts b/app/api/billing/portal/route.ts
+new file mode 100644
+index 0000000..0fd9bb3
+--- /dev/null
++++ b/app/api/billing/portal/route.ts
+@@ -0,0 +1,19 @@
++import { NextResponse } from "next/server";
++import Stripe from "stripe";
++import { currentUserId, db } from "@/lib/db";
++
++// "Manage or cancel subscription": sends the signed-in user to the Stripe Customer Portal.
++export async function POST() {
++  const user = db.findById(currentUserId());
++  if (!user?.stripeCustomerId) {
++    return NextResponse.json({ error: "No subscription found for this account." }, { status: 404 });
++  }
++
++  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
++  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
++  const session = await stripe.billingPortal.sessions.create({
++    customer: user.stripeCustomerId,
++    return_url: `${appUrl}/settings/profile`,
++  });
++  return NextResponse.redirect(session.url, 303);
++}
+diff --git a/app/api/block/route.ts b/app/api/block/route.ts
+new file mode 100644
+index 0000000..e00f894
+--- /dev/null
++++ b/app/api/block/route.ts
+@@ -0,0 +1,13 @@
++import { NextResponse } from "next/server";
++import { currentUserId, db } from "@/lib/db";
++
++// POST /api/block { userId } — hides that user's profile from the signed-in user.
++export async function POST(req: Request) {
++  const { userId } = await req.json().catch(() => ({}));
++  const me = currentUserId();
++  if (!userId || userId === me || !db.findById(userId)) {
++    return NextResponse.json({ error: "Unknown user" }, { status: 400 });
++  }
++  db.block(me, userId);
++  return NextResponse.json({ blocked: true });
++}
+diff --git a/app/api/checkout/route.ts b/app/api/checkout/route.ts
+index b6ae044..d88e45f 100644
+--- a/app/api/checkout/route.ts
++++ b/app/api/checkout/route.ts
+@@ -1,7 +1,15 @@
+ import { NextResponse } from "next/server";
+ import Stripe from "stripe";
+ 
+-export async function POST() {
++export async function POST(req: Request) {
++  const { renewalConsent } = await req.json().catch(() => ({}));
++  if (renewalConsent !== true) {
++    return NextResponse.json(
++      { error: "Please agree to the automatic renewal terms." },
++      { status: 400 },
++    );
++  }
++
+   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+ 
+@@ -10,6 +18,13 @@ export async function POST() {
+     line_items: [{ price: process.env.STRIPE_PRICE_PRO, quantity: 1 }],
+     success_url: `${appUrl}/settings/profile?upgraded=1`,
+     cancel_url: `${appUrl}/pricing`,
++    custom_text: {
++      submit: {
++        message:
++          "Vibely Pro renews automatically at $12 every month until you cancel. " +
++          "You can cancel online anytime from your profile settings.",
++      },
++    },
+   });
+ 
+   return NextResponse.json({ url: session.url });
+diff --git a/app/api/report/route.ts b/app/api/report/route.ts
+new file mode 100644
+index 0000000..2907d58
+--- /dev/null
++++ b/app/api/report/route.ts
+@@ -0,0 +1,17 @@
++import { NextResponse } from "next/server";
++import { currentUserId, db } from "@/lib/db";
++
++// POST /api/report { userId, reason } — stores a report for admins to review.
++export async function POST(req: Request) {
++  const { userId, reason } = await req.json().catch(() => ({}));
++  if (!userId || !db.findById(userId)) {
++    return NextResponse.json({ error: "Unknown user" }, { status: 400 });
++  }
++  db.addReport({
++    itemId: `user:${userId}`,
++    reporterId: currentUserId(),
++    reason: String(reason ?? "").slice(0, 1000),
++    createdAt: new Date().toISOString(),
++  });
++  return NextResponse.json({ reported: true });
++}
+diff --git a/app/api/signup/route.ts b/app/api/signup/route.ts
+index ce15ba9..b7c41d9 100644
+--- a/app/api/signup/route.ts
++++ b/app/api/signup/route.ts
+@@ -1,16 +1,59 @@
+-import { NextResponse } from "next/server";
++import { NextRequest, NextResponse } from "next/server";
+ import { db, hashPassword } from "@/lib/db";
++import { clientIp, rateLimit } from "@/lib/rate-limit";
+ 
+-export async function POST(req: Request) {
+-  const { name, handle, email, password } = await req.json();
++const AGE_BLOCK_COOKIE = "vibely_age_block";
++const NOT_NOW = "Sorry, we can't create an account for you right now.";
++
++function tooMany(retryAfterSeconds: number) {
++  return NextResponse.json(
++    { error: "Too many attempts. Please try again later." },
++    { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
++  );
++}
++
++function ageFrom(birthYear: number, birthMonth: number): number {
++  const now = new Date();
++  let age = now.getFullYear() - birthYear;
++  if (now.getMonth() + 1 < birthMonth) age -= 1;
++  return age;
++}
++
++export async function POST(req: NextRequest) {
++  const ipLimit = rateLimit(`signup:ip:${clientIp(req)}`);
++  if (!ipLimit.ok) return tooMany(ipLimit.retryAfterSeconds);
++
++  if (req.cookies.get(AGE_BLOCK_COOKIE)) {
++    return NextResponse.json({ error: NOT_NOW }, { status: 403 });
++  }
++
++  const { name, handle, email, password, birthMonth, birthYear } = await req.json();
+   if (!email || !password || !handle) {
+     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+   }
++  const month = Number(birthMonth);
++  const year = Number(birthYear);
++  if (!Number.isInteger(month) || month < 1 || month > 12 ||
++      !Number.isInteger(year) || year < 1900 || year > new Date().getFullYear()) {
++    return NextResponse.json({ error: "Please enter your date of birth." }, { status: 400 });
++  }
++
++  const emailLimit = rateLimit(`signup:email:${String(email).toLowerCase()}`);
++  if (!emailLimit.ok) return tooMany(emailLimit.retryAfterSeconds);
++
++  // Under 13: create nothing and store nothing (not even the email).
++  if (ageFrom(year, month) < 13) {
++    const res = NextResponse.json({ error: NOT_NOW }, { status: 403 });
++    res.cookies.set(AGE_BLOCK_COOKIE, "1", { maxAge: 60 * 60 * 24, httpOnly: true, sameSite: "lax" });
++    return res;
++  }
++
+   const user = db.createUser({
+     name,
+     handle,
+     email,
+     passwordHash: await hashPassword(password),
++    is13Plus: true,
+   });
+   return NextResponse.json({ id: user.id });
+ }
+diff --git a/app/api/unsubscribe/route.ts b/app/api/unsubscribe/route.ts
+new file mode 100644
+index 0000000..e891b11
+--- /dev/null
++++ b/app/api/unsubscribe/route.ts
+@@ -0,0 +1,25 @@
++import { NextResponse } from "next/server";
++import { db } from "@/lib/db";
++import { verifyUnsubscribeToken } from "@/lib/unsubscribe";
++
++// POST only: mail scanners open GET links, so the page at /unsubscribe asks for a click.
++// Handles both the confirm form and one-click unsubscribe (RFC 8058, params in the URL).
++export async function POST(req: Request) {
++  const url = new URL(req.url);
++  let email = url.searchParams.get("email");
++  let token = url.searchParams.get("token");
++  const fromForm = !email || !token;
++  if (fromForm) {
++    const form = await req.formData().catch(() => null);
++    email = form?.get("email")?.toString() ?? null;
++    token = form?.get("token")?.toString() ?? null;
++  }
++
++  if (!email || !token || !verifyUnsubscribeToken(email, token)) {
++    return NextResponse.json({ error: "Invalid unsubscribe link" }, { status: 400 });
++  }
++  db.unsubscribe(email);
++
++  if (fromForm) return NextResponse.redirect(new URL("/unsubscribe?done=1", req.url), 303);
++  return NextResponse.json({ unsubscribed: true });
++}
+diff --git a/app/api/waitlist/launch/route.ts b/app/api/waitlist/launch/route.ts
+index 91cba45..9e3cc49 100644
+--- a/app/api/waitlist/launch/route.ts
++++ b/app/api/waitlist/launch/route.ts
+@@ -1,23 +1,50 @@
++import { timingSafeEqual } from "node:crypto";
+ import { NextResponse } from "next/server";
+ import { Resend } from "resend";
+ import { db } from "@/lib/db";
++import { appBaseUrl, legalDetail } from "@/lib/legal";
++import { unsubscribeQuery } from "@/lib/unsubscribe";
+ import { launchAnnouncementEmail } from "@/emails/launch-announcement";
+ 
++// Admins call this with `Authorization: Bearer <ADMIN_API_SECRET>`.
++function isAdmin(req: Request): boolean {
++  const secret = process.env.ADMIN_API_SECRET;
++  if (!secret) return false;
++  const expected = Buffer.from(`Bearer ${secret}`);
++  const given = Buffer.from(req.headers.get("authorization") ?? "");
++  return given.length === expected.length && timingSafeEqual(given, expected);
++}
++
+ // POST /api/waitlist/launch  — sends the launch announcement to everyone on the waitlist.
+-export async function POST() {
++export async function POST(req: Request) {
++  if (!isAdmin(req)) {
++    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
++  }
++
+   const resend = new Resend(process.env.RESEND_API_KEY);
+-  const { subject, html } = launchAnnouncementEmail({
+-    appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+-  });
++  const appUrl = appBaseUrl();
++  const postalAddress = legalDetail("COMPANY_POSTAL_ADDRESS");
+ 
+-  const emails = db.waitlistEmails();
++  const emails = db.waitlistEmails().filter((to) => !db.isUnsubscribed(to));
+   const { error } = await resend.batch.send(
+-    emails.map((to) => ({
+-      from: "Vibely <hello@vibely.app>",
+-      to,
+-      subject,
+-      html,
+-    })),
++    emails.map((to) => {
++      const query = unsubscribeQuery(to);
++      const { subject, html } = launchAnnouncementEmail({
++        appUrl,
++        postalAddress,
++        unsubscribeUrl: `${appUrl}/unsubscribe?${query}`,
++      });
++      return {
++        from: "Vibely <hello@vibely.app>",
++        to,
++        subject,
++        html,
++        headers: {
++          "List-Unsubscribe": `<${appUrl}/api/unsubscribe?${query}>`,
++          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
++        },
++      };
++    }),
+   );
+   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+   return NextResponse.json({ sent: emails.length });
+diff --git a/app/consent-banner.tsx b/app/consent-banner.tsx
+new file mode 100644
+index 0000000..996b615
+--- /dev/null
++++ b/app/consent-banner.tsx
+@@ -0,0 +1,30 @@
++"use client";
++
++import Link from "next/link";
++import { useEffect, useState } from "react";
++import { CONSENT_EVENT, readConsent, saveConsent, type Consent } from "@/lib/consent";
++
++export function ConsentBanner() {
++  // "unread" until the saved choice is read in the browser, so nothing flashes during SSR.
++  const [choice, setChoice] = useState<Consent | null | "unread">("unread");
++
++  useEffect(() => {
++    const sync = () => setChoice(readConsent());
++    sync();
++    window.addEventListener(CONSENT_EVENT, sync);
++    return () => window.removeEventListener(CONSENT_EVENT, sync);
++  }, []);
++
++  if (choice !== null) return null;
++
++  return (
++    <div className="consent" role="dialog" aria-label="Cookie consent">
++      <p>
++        We use cookies for analytics and session recordings (typed text is masked) to improve
++        Vibely. Nothing is recorded unless you accept. <Link href="/privacy">Privacy Policy</Link>
++      </p>
++      <button onClick={() => saveConsent("yes")}>Accept</button>{" "}
++      <button onClick={() => saveConsent("no")}>Decline</button>
++    </div>
++  );
++}
+diff --git a/app/dmca/page.tsx b/app/dmca/page.tsx
+new file mode 100644
+index 0000000..5461f62
+--- /dev/null
++++ b/app/dmca/page.tsx
+@@ -0,0 +1,60 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++// Agent details must match your registration at https://dmca.copyright.gov.
++import { legalDetail } from "@/lib/legal";
++
++export const dynamic = "force-dynamic";
++
++export default function DmcaPage() {
++  const agent = {
++    name: legalDetail("DMCA_AGENT_NAME"),
++    address: legalDetail("DMCA_AGENT_ADDRESS"),
++    phone: legalDetail("DMCA_AGENT_PHONE"),
++    email: legalDetail("DMCA_AGENT_EMAIL"),
++  };
++
++  return (
++    <main>
++      <h1>Copyright (DMCA) policy</h1>
++      <p>
++        We respond to notices of alleged copyright infringement under the Digital Millennium
++        Copyright Act (17 U.S.C. §512).
++      </p>
++
++      <h2>Designated agent</h2>
++      <p>
++        {agent.name}<br />
++        {agent.address}<br />
++        {agent.phone}<br />
++        {agent.email}
++      </p>
++
++      <h2>Sending a notice</h2>
++      <p>Your notice must include:</p>
++      <ol>
++        <li>The copyrighted work you say is infringed.</li>
++        <li>The URL of the material on Vibely you want removed.</li>
++        <li>Your name, postal address, phone number and email.</li>
++        <li>A statement that you believe in good faith the use is not authorized by the owner, its agent, or the law.</li>
++        <li>
++          A statement that the notice is accurate and, under penalty of perjury, that you are the
++          owner or authorized to act for the owner.
++        </li>
++        <li>Your physical or electronic signature.</li>
++      </ol>
++
++      <h2>Counter-notice</h2>
++      <p>
++        If your content was removed and you believe it was a mistake or misidentification, send
++        the agent a counter-notice with: identification of the removed material and where it
++        appeared; a statement under penalty of perjury that you believe in good faith it was
++        removed by mistake or misidentification; your name, address and phone number; consent to
++        the jurisdiction of the federal district court for your address (or, outside the U.S.,
++        any district where we may be found) and to accept service from the person who sent the
++        notice; and your signature.
++      </p>
++
++      <h2>Repeat infringers</h2>
++      <p>We terminate, in appropriate circumstances, the accounts of users who repeatedly infringe.</p>
++    </main>
++  );
++}
+diff --git a/app/globals.css b/app/globals.css
+index 00d522a..53e7ecf 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -1,7 +1,12 @@
+ :root { --fg: #111; --bg: #fafafa; --accent: #7c3aed; }
+ * { box-sizing: border-box; }
+-body { margin: 0; font-family: "Inter", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
++body { margin: 0; font-family: var(--font-inter), system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+ main { max-width: 640px; margin: 0 auto; padding: 48px 20px; }
+ button, .btn { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 12px 20px; font-weight: 600; cursor: pointer; }
+-input { display: block; width: 100%; padding: 10px 12px; margin: 6px 0 16px; border: 1px solid #ddd; border-radius: 8px; }
+-footer { margin-top: 64px; color: #777; font-size: 14px; }
++button:disabled { opacity: 0.5; cursor: not-allowed; }
++button.link { background: none; color: inherit; padding: 0; font: inherit; font-weight: 400; text-decoration: underline; }
++input, select { display: block; width: 100%; padding: 10px 12px; margin: 6px 0 16px; border: 1px solid #ddd; border-radius: 8px; }
++input[type="checkbox"] { display: inline; width: auto; margin: 0 8px 0 0; }
++footer, .site-footer { margin-top: 64px; color: #666; font-size: 14px; }
++.site-footer { max-width: 640px; margin: 0 auto; padding: 0 20px 48px; }
++.consent { position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 640px; margin: 0 auto; padding: 16px 20px; background: #fff; border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
+diff --git a/app/layout.tsx b/app/layout.tsx
+index 3bf1601..4421509 100644
+--- a/app/layout.tsx
++++ b/app/layout.tsx
+@@ -1,7 +1,12 @@
+ import type { Metadata } from "next";
++import { Inter } from "next/font/google";
+ import { Providers } from "./providers";
++import { SiteFooter } from "./site-footer";
+ import "./globals.css";
+ 
++// Self-hosted at build time: visitors' browsers never contact Google's font servers.
++const inter = Inter({ subsets: ["latin"], weight: ["400", "600", "800"], variable: "--font-inter" });
++
+ export const metadata: Metadata = {
+   title: "Vibely — share your vibe",
+   description: "Post one vibe a day. See your friends' vibes.",
+@@ -9,17 +14,12 @@ export const metadata: Metadata = {
+ 
+ export default function RootLayout({ children }: { children: React.ReactNode }) {
+   return (
+-    <html lang="en">
+-      <head>
+-        <link rel="preconnect" href="https://fonts.googleapis.com" />
+-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+-        <link
+-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap"
+-          rel="stylesheet"
+-        />
+-      </head>
++    <html lang="en" className={inter.variable}>
+       <body>
+-        <Providers>{children}</Providers>
++        <Providers>
++          {children}
++          <SiteFooter />
++        </Providers>
+       </body>
+     </html>
+   );
+diff --git a/app/page.tsx b/app/page.tsx
+index c27e891..0ce4915 100644
+--- a/app/page.tsx
++++ b/app/page.tsx
+@@ -9,7 +9,6 @@ export default function Home() {
+         <Link className="btn" href="/signup">Get started — it&apos;s free</Link>{" "}
+         <Link href="/pricing">Pricing</Link>
+       </p>
+-      <footer>© 2026 Vibely. Made with good vibes.</footer>
+     </main>
+   );
+ }
+diff --git a/app/pricing/page.tsx b/app/pricing/page.tsx
+index f2b5a46..17c0ae4 100644
+--- a/app/pricing/page.tsx
++++ b/app/pricing/page.tsx
+@@ -1,10 +1,24 @@
+ "use client";
+ 
++import Link from "next/link";
++import { useState } from "react";
++
+ export default function PricingPage() {
++  const [agreed, setAgreed] = useState(false);
++  const [error, setError] = useState("");
++
+   async function subscribe() {
+-    const res = await fetch("/api/checkout", { method: "POST" });
+-    const { url } = await res.json();
+-    window.location.href = url;
++    const res = await fetch("/api/checkout", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ renewalConsent: agreed }),
++    });
++    const data = await res.json();
++    if (!res.ok) {
++      setError(data.error ?? "Something went wrong");
++      return;
++    }
++    window.location.href = data.url;
+   }
+ 
+   return (
+@@ -16,7 +30,24 @@ export default function PricingPage() {
+         <li>Custom profile themes</li>
+         <li>See who viewed your vibe</li>
+       </ul>
+-      <button onClick={subscribe}>Go Pro</button>
++      {/* TODO(legal-check): add when a cancellation takes effect, matching your Stripe settings. */}
++      <p>
++        <b>Automatic renewal:</b> Vibely Pro costs $12, charged every month until you cancel.
++        You can cancel online anytime from your profile settings with
++        &ldquo;Manage or cancel subscription&rdquo;.
++      </p>
++      <label>
++        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
++        I agree to the automatic renewal terms above.
++      </label>
++      {error && <p style={{ color: "crimson" }}>{error}</p>}
++      <p>
++        <button onClick={subscribe} disabled={!agreed}>Go Pro</button>
++      </p>
++      <p style={{ fontSize: 14 }}>
++        See our <Link href="/terms">Terms</Link>, <Link href="/refunds">Refund policy</Link> and{" "}
++        <Link href="/privacy">Privacy Policy</Link>.
++      </p>
+     </main>
+   );
+ }
+diff --git a/app/privacy/page.tsx b/app/privacy/page.tsx
+new file mode 100644
+index 0000000..546a7e9
+--- /dev/null
++++ b/app/privacy/page.tsx
+@@ -0,0 +1,90 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++import { legalDetail } from "@/lib/legal";
++
++// Rendered per request so a missing CONTACT_EMAIL fails in production instead of shipping a TODO.
++export const dynamic = "force-dynamic";
++
++export default function PrivacyPage() {
++  const contact = legalDetail("CONTACT_EMAIL");
++  const effective = legalDetail("LEGAL_EFFECTIVE_DATE");
++
++  return (
++    <main>
++      <h1>Privacy Policy</h1>
++      <p>Effective {effective}. We review this policy at least every 12 months.</p>
++      {/* TODO(legal-check): name the company that operates Vibely. */}
++
++      <h2>What we collect</h2>
++      <ul>
++        <li>Account details: name, username, email address and password (stored as a salted hash).</li>
++        <li>
++          Date of birth: asked at sign-up only to check that you are 13 or older. We don&apos;t
++          store the date, only that the check passed.
++        </li>
++        <li>Profile picture, if you upload one. It is public on your profile.</li>
++        <li>Subscription status if you buy Vibely Pro. Card details go directly to Stripe, not to us.</li>
++        <li>
++          If you accept analytics cookies: pages you visit, clicks, and recordings of your
++          sessions (see below).
++        </li>
++      </ul>
++
++      <h2>Who we share it with</h2>
++      <ul>
++        <li><b>PostHog</b> — product analytics and session recording, only after you accept cookies.</li>
++        <li><b>Stripe</b> — payment processing for Vibely Pro.</li>
++        <li><b>Resend</b> — sending email, such as our launch announcement.</li>
++        <li><b>Vercel Blob</b> — storing profile pictures (served from a public URL).</li>
++      </ul>
++      <p>
++        We don&apos;t sell your personal information and we don&apos;t use advertising pixels.
++        {/* TODO(legal-check): confirm no other sharing (e.g. hosting provider, support tools). */}
++      </p>
++
++      <h2>Cookies and session recording</h2>
++      <p>
++        With your consent, PostHog sets cookies and records how you use Vibely (page views,
++        clicks, scrolling) so we can see where people get stuck. Text you type into forms is
++        masked in recordings. Nothing is recorded unless you click &ldquo;Accept&rdquo; in the
++        cookie banner. You can change your choice anytime with &ldquo;Cookie settings&rdquo;
++        in the footer. We also set a short-lived cookie during sign-up (24 hours) as part of
++        the age check, and remember your cookie choice in your browser.
++      </p>
++
++      <h2>Email</h2>
++      <p>Every marketing email has an unsubscribe link. We honor opt-outs promptly.</p>
++
++      <h2>Your choices and rights</h2>
++      <ul>
++        <li>Download your data: Settings → &ldquo;Download my data&rdquo;.</li>
++        <li>Delete your account: Settings → &ldquo;Delete my account&rdquo; removes your account and profile picture.</li>
++        <li>Correct your data or ask any privacy question: email {contact}.</li>
++      </ul>
++      <p>
++        Stripe keeps payment and invoice records under its own policy and as the law requires.
++        {/* TODO(legal-check): list any records you must keep (e.g. invoices for tax) and for how long. */}
++      </p>
++
++      <h2>California residents</h2>
++      <p>
++        Categories we collect: identifiers (name, username, email), account credentials,
++        commercial information (subscription status), internet activity (analytics, only with
++        consent), and photos you upload. Sources: you, and your use of Vibely. Purposes: running
++        your account, billing, email, and improving the product. Recipients: the service
++        providers listed above. You may ask to know, delete, or correct your personal
++        information, and to opt out of sale or sharing; we don&apos;t sell or share it for
++        cross-context advertising. We won&apos;t treat you differently for using these rights.
++        To make a request, use Settings or email {contact}.
++      </p>
++
++      <h2>Children</h2>
++      <p>
++        Vibely is not directed to children under 13, and we don&apos;t knowingly collect personal
++        information from them. If you think a child under 13 has given us information, email {contact}.
++      </p>
++
++      <h2>Contact</h2>
++      <p>{contact}</p>
++    </main>
++  );
++}
+diff --git a/app/providers.tsx b/app/providers.tsx
+index 579925e..a3fffcc 100644
+--- a/app/providers.tsx
++++ b/app/providers.tsx
+@@ -3,19 +3,43 @@
+ import posthog from "posthog-js";
+ import { PostHogProvider } from "posthog-js/react";
+ import { useEffect } from "react";
++import { CONSENT_EVENT, readConsent } from "@/lib/consent";
++import { ConsentBanner } from "./consent-banner";
++
++let analyticsLoaded = false;
++
++// Only called after the visitor clicks Accept: PostHog sets cookies and records sessions.
++function loadAnalytics() {
++  if (analyticsLoaded) return;
++  analyticsLoaded = true;
++  posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "", {
++    api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
++    person_profiles: "identified_only",
++    // We want to see exactly where people get stuck in onboarding.
++    // Inputs stay masked (PostHog's default).
++    disable_session_recording: false,
++  });
++}
+ 
+ export function Providers({ children }: { children: React.ReactNode }) {
+   useEffect(() => {
+-    posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "", {
+-      api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
+-      person_profiles: "identified_only",
+-      // We want to see exactly where people get stuck in onboarding.
+-      disable_session_recording: false,
+-      session_recording: {
+-        maskAllInputs: false,
+-      },
+-    });
++    function applyConsent() {
++      const choice = readConsent();
++      if (choice === "yes") loadAnalytics();
++      else if (choice === "no" && analyticsLoaded) {
++        posthog.opt_out_capturing();
++        window.location.reload();
++      }
++    }
++    applyConsent();
++    window.addEventListener(CONSENT_EVENT, applyConsent);
++    return () => window.removeEventListener(CONSENT_EVENT, applyConsent);
+   }, []);
+ 
+-  return <PostHogProvider client={posthog}>{children}</PostHogProvider>;
++  return (
++    <PostHogProvider client={posthog}>
++      {children}
++      <ConsentBanner />
++    </PostHogProvider>
++  );
+ }
+diff --git a/app/refunds/page.tsx b/app/refunds/page.tsx
+new file mode 100644
+index 0000000..eb3018d
+--- /dev/null
++++ b/app/refunds/page.tsx
+@@ -0,0 +1,25 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++import { legalDetail } from "@/lib/legal";
++
++export const dynamic = "force-dynamic";
++
++export default function RefundsPage() {
++  const contact = legalDetail("CONTACT_EMAIL");
++
++  return (
++    <main>
++      <h1>Refund &amp; cancellation policy</h1>
++
++      <h2>Cancelling</h2>
++      <p>
++        Vibely Pro renews every month until you cancel. Cancel online anytime in your profile
++        settings with &ldquo;Manage or cancel subscription&rdquo;.
++      </p>
++      {/* TODO(legal-check): say when a cancellation takes effect, matching your Stripe settings. */}
++
++      <h2>Refunds</h2>
++      {/* TODO(legal-check): state your refund window or "no refunds" rule. */}
++      <p>To ask for a refund, email {contact} with the email address on your account.</p>
++    </main>
++  );
++}
+diff --git a/app/settings/profile/page.tsx b/app/settings/profile/page.tsx
+index 0b6989f..4dbf86e 100644
+--- a/app/settings/profile/page.tsx
++++ b/app/settings/profile/page.tsx
+@@ -1,8 +1,10 @@
+ "use client";
+ 
+ import { useState } from "react";
++import { useRouter } from "next/navigation";
+ 
+ export default function ProfileSettings() {
++  const router = useRouter();
+   const [avatar, setAvatar] = useState<string | null>(null);
+ 
+   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+@@ -15,6 +17,12 @@ export default function ProfileSettings() {
+     setAvatar(url);
+   }
+ 
++  async function deleteAccount() {
++    if (!window.confirm("Delete your account and profile picture permanently? This can't be undone.")) return;
++    const res = await fetch("/api/account", { method: "DELETE" });
++    if (res.ok) router.push("/");
++  }
++
+   return (
+     <main>
+       <h1>Your profile</h1>
+@@ -23,7 +31,16 @@ export default function ProfileSettings() {
+         Profile picture
+         <input type="file" accept="image/*" onChange={onFile} />
+       </label>
+-      <p>Your picture is shown on your public profile.</p>
++      <p>Your picture is shown on your public profile. Only upload pictures you have the right to share.</p>
++
++      <h2>Subscription</h2>
++      <form action="/api/billing/portal" method="post">
++        <button type="submit">Manage or cancel subscription</button>
++      </form>
++
++      <h2>Your data</h2>
++      <p><a href="/api/account/export" download>Download my data</a></p>
++      <button type="button" onClick={deleteAccount}>Delete my account</button>
+     </main>
+   );
+ }
+diff --git a/app/signup/page.tsx b/app/signup/page.tsx
+index 892d456..659da0c 100644
+--- a/app/signup/page.tsx
++++ b/app/signup/page.tsx
+@@ -1,8 +1,16 @@
+ "use client";
+ 
++import Link from "next/link";
+ import { useState } from "react";
+ import { useRouter } from "next/navigation";
+ 
++const MONTHS = [
++  "January", "February", "March", "April", "May", "June",
++  "July", "August", "September", "October", "November", "December",
++];
++const THIS_YEAR = new Date().getFullYear();
++const YEARS = Array.from({ length: 121 }, (_, i) => THIS_YEAR - i);
++
+ export default function SignupPage() {
+   const router = useRouter();
+   const [error, setError] = useState("");
+@@ -30,7 +38,25 @@ export default function SignupPage() {
+         <label>Username<input name="handle" required pattern="[a-z0-9_]{3,20}" /></label>
+         <label>Email<input name="email" type="email" required /></label>
+         <label>Password<input name="password" type="password" minLength={8} required /></label>
++        <label>
++          Birth month
++          <select name="birthMonth" required defaultValue="">
++            <option value="" disabled>Month</option>
++            {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
++          </select>
++        </label>
++        <label>
++          Birth year
++          <select name="birthYear" required defaultValue="">
++            <option value="" disabled>Year</option>
++            {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
++          </select>
++        </label>
+         {error && <p style={{ color: "crimson" }}>{error}</p>}
++        <p>
++          By signing up you agree to the <Link href="/terms">Terms</Link> and{" "}
++          <Link href="/privacy">Privacy Policy</Link>.
++        </p>
+         <button type="submit">Sign up</button>
+       </form>
+     </main>
+diff --git a/app/site-footer.tsx b/app/site-footer.tsx
+new file mode 100644
+index 0000000..3741acd
+--- /dev/null
++++ b/app/site-footer.tsx
+@@ -0,0 +1,17 @@
++"use client";
++
++import Link from "next/link";
++import { reopenConsent } from "@/lib/consent";
++
++export function SiteFooter() {
++  return (
++    <footer className="site-footer">
++      <p>© 2026 Vibely. Made with good vibes.</p>
++      <nav aria-label="Legal">
++        <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link> ·{" "}
++        <Link href="/refunds">Refunds</Link> · <Link href="/dmca">Copyright (DMCA)</Link> ·{" "}
++        <button type="button" className="link" onClick={reopenConsent}>Cookie settings</button>
++      </nav>
++    </footer>
++  );
++}
+diff --git a/app/terms/page.tsx b/app/terms/page.tsx
+new file mode 100644
+index 0000000..f4ee447
+--- /dev/null
++++ b/app/terms/page.tsx
+@@ -0,0 +1,62 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++import Link from "next/link";
++import { legalDetail } from "@/lib/legal";
++
++export const dynamic = "force-dynamic";
++
++export default function TermsPage() {
++  const contact = legalDetail("CONTACT_EMAIL");
++  const effective = legalDetail("LEGAL_EFFECTIVE_DATE");
++
++  return (
++    <main>
++      <h1>Terms of Service</h1>
++      <p>Effective {effective}.</p>
++      {/* TODO(legal-check): name the company that operates Vibely. */}
++
++      <h2>Who can use Vibely</h2>
++      <p>You must be at least 13 years old to create an account.</p>
++
++      <h2>Your content</h2>
++      <p>
++        You keep ownership of what you post. By posting, you give us a license to host, display
++        and share it on Vibely so the service works. Only post content you have the right to
++        share. We may remove content or accounts that break these terms. Copyright complaints:
++        see our <Link href="/dmca">DMCA policy</Link>.
++      </p>
++
++      <h2>Acceptable use</h2>
++      <p>
++        Don&apos;t harass, threaten or impersonate others, post illegal content, or share
++        intimate images of anyone without their consent. You can report a profile or block a
++        user from their profile page. We review reports promptly and remove content that breaks
++        these rules, including intimate images shared without consent within 48 hours of a
++        valid request. Reports and removal requests: {contact}.
++      </p>
++
++      <h2>Vibely Pro</h2>
++      <p>
++        Vibely Pro is $12 per month and renews automatically until you cancel. You can cancel
++        online anytime in your profile settings. See our <Link href="/refunds">Refund policy</Link>.
++      </p>
++
++      <h2>Disclaimer</h2>
++      <p>
++        Vibely is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo;, without
++        warranties of any kind, to the extent the law allows.
++      </p>
++
++      <h2>Limitation of liability</h2>
++      <p>
++        To the extent the law allows, we are not liable for indirect, incidental or
++        consequential damages, and our total liability is limited to the amount you paid us in
++        the 12 months before the claim.
++      </p>
++
++      {/* TODO(legal-check): governing law and venue. */}
++
++      <h2>Contact</h2>
++      <p>{contact}</p>
++    </main>
++  );
++}
+diff --git a/app/u/[handle]/page.tsx b/app/u/[handle]/page.tsx
+index 49676b9..ec744d8 100644
+--- a/app/u/[handle]/page.tsx
++++ b/app/u/[handle]/page.tsx
+@@ -1,11 +1,21 @@
+ import { notFound } from "next/navigation";
+-import { db } from "@/lib/db";
++import { currentUserId, db } from "@/lib/db";
++import { ProfileActions } from "./profile-actions";
+ 
+ export default async function PublicProfile({ params }: { params: Promise<{ handle: string }> }) {
+   const { handle } = await params;
+   const user = db.findByHandle(handle);
+   if (!user) notFound();
+ 
++  const viewerId = currentUserId();
++  if (db.isBlocked(viewerId, user.id)) {
++    return (
++      <main>
++        <p>You blocked this user.</p>
++      </main>
++    );
++  }
++
+   return (
+     <main>
+       {user.avatarUrl && (
+@@ -13,6 +23,7 @@ export default async function PublicProfile({ params }: { params: Promise<{ hand
+       )}
+       <h1>{user.name}</h1>
+       <p>@{user.handle}</p>
++      {user.id !== viewerId && <ProfileActions userId={user.id} />}
+     </main>
+   );
+ }
+diff --git a/app/u/[handle]/profile-actions.tsx b/app/u/[handle]/profile-actions.tsx
+new file mode 100644
+index 0000000..1becb78
+--- /dev/null
++++ b/app/u/[handle]/profile-actions.tsx
+@@ -0,0 +1,39 @@
++"use client";
++
++import { useState } from "react";
++import { useRouter } from "next/navigation";
++
++export function ProfileActions({ userId }: { userId: string }) {
++  const router = useRouter();
++  const [message, setMessage] = useState("");
++
++  async function report() {
++    const reason = window.prompt("Why are you reporting this profile?");
++    if (!reason) return;
++    const res = await fetch("/api/report", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ userId, reason }),
++    });
++    setMessage(res.ok ? "Thanks — our team will review this report." : "Couldn't send the report.");
++  }
++
++  async function block() {
++    if (!window.confirm("Block this user? You won't see their profile anymore.")) return;
++    const res = await fetch("/api/block", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ userId }),
++    });
++    if (res.ok) router.refresh();
++    else setMessage("Couldn't block this user.");
++  }
++
++  return (
++    <p>
++      <button type="button" onClick={report}>Report</button>{" "}
++      <button type="button" onClick={block}>Block</button>
++      {message && <span role="status"> {message}</span>}
++    </p>
++  );
++}
+diff --git a/app/unsubscribe/page.tsx b/app/unsubscribe/page.tsx
+new file mode 100644
+index 0000000..0e07f9d
+--- /dev/null
++++ b/app/unsubscribe/page.tsx
+@@ -0,0 +1,35 @@
++type Params = { email?: string; token?: string; done?: string };
++
++export default async function UnsubscribePage({ searchParams }: { searchParams: Promise<Params> }) {
++  const { email, token, done } = await searchParams;
++
++  if (done) {
++    return (
++      <main>
++        <h1>You're unsubscribed</h1>
++        <p>You won't get marketing emails from Vibely anymore.</p>
++      </main>
++    );
++  }
++
++  if (!email || !token) {
++    return (
++      <main>
++        <h1>Unsubscribe</h1>
++        <p>This link is incomplete. Please use the link from the email you received.</p>
++      </main>
++    );
++  }
++
++  return (
++    <main>
++      <h1>Unsubscribe</h1>
++      <p>Stop marketing emails to {email}?</p>
++      <form action="/api/unsubscribe" method="post">
++        <input type="hidden" name="email" value={email} />
++        <input type="hidden" name="token" value={token} />
++        <button type="submit">Unsubscribe</button>
++      </form>
++    </main>
++  );
++}
+diff --git a/emails/launch-announcement.ts b/emails/launch-announcement.ts
+index 5b98c18..c40c67d 100644
+--- a/emails/launch-announcement.ts
++++ b/emails/launch-announcement.ts
+@@ -1,4 +1,16 @@
+-export function launchAnnouncementEmail({ appUrl }: { appUrl: string }) {
++function escapeHtml(s: string): string {
++  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
++}
++
++export function launchAnnouncementEmail({
++  appUrl,
++  unsubscribeUrl,
++  postalAddress,
++}: {
++  appUrl: string;
++  unsubscribeUrl: string;
++  postalAddress: string;
++}) {
+   return {
+     subject: "Vibely is live — claim your username 🎉",
+     html: `
+@@ -9,6 +21,12 @@ export function launchAnnouncementEmail({ appUrl }: { appUrl: string }) {
+         for your first 3 months with code <b>EARLYVIBE</b>.</p>
+         <p><a href="${appUrl}/signup" style="background:#7c3aed;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;">Claim my username</a></p>
+         <p>See you inside,<br/>The Vibely team</p>
++        <hr style="border:0;border-top:1px solid #eee;margin:24px 0;" />
++        <p style="font-size:12px;color:#555;">
++          You're getting this because you joined the Vibely waitlist.
++          <a href="${unsubscribeUrl}" style="color:#555;">Unsubscribe</a><br/>
++          ${escapeHtml(postalAddress)}
++        </p>
+       </div>
+     `,
+   };
+diff --git a/lib/consent.ts b/lib/consent.ts
+new file mode 100644
+index 0000000..9df6045
+--- /dev/null
++++ b/lib/consent.ts
+@@ -0,0 +1,25 @@
++// Visitor's choice about analytics cookies and session recording. Browser only.
++export type Consent = "yes" | "no";
++
++const KEY = "vibely-consent";
++export const CONSENT_EVENT = "vibely-consent-change";
++
++export function readConsent(): Consent | null {
++  try {
++    const v = localStorage.getItem(KEY);
++    return v === "yes" || v === "no" ? v : null;
++  } catch {
++    return null;
++  }
++}
++
++export function saveConsent(choice: Consent) {
++  localStorage.setItem(KEY, choice);
++  window.dispatchEvent(new Event(CONSENT_EVENT));
++}
++
++// "Cookie settings" link: forget the choice so the banner asks again.
++export function reopenConsent() {
++  localStorage.removeItem(KEY);
++  window.dispatchEvent(new Event(CONSENT_EVENT));
++}
+diff --git a/lib/db.ts b/lib/db.ts
+index 8c7466a..bbe6983 100644
+--- a/lib/db.ts
++++ b/lib/db.ts
+@@ -1,3 +1,5 @@
++import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
++
+ // Tiny in-memory store so the sample runs without a database.
+ export type User = {
+   id: string;
+@@ -5,13 +7,27 @@ export type User = {
+   name: string;
+   handle: string;
+   passwordHash: string;
++  // Only the result of the sign-up age check is kept, never the birth date.
++  is13Plus: true;
+   avatarUrl?: string;
+   plan: "free" | "pro";
+   stripeCustomerId?: string;
+ };
+ 
++export type Report = {
++  itemId: string;
++  reporterId: string;
++  reason: string;
++  createdAt: string;
++};
++
+ const users = new Map<string, User>();
+ const waitlist = new Set<string>(["early@example.com", "fan@example.com"]);
++const unsubscribed = new Set<string>();
++// Readable by admins only: no route exposes this list.
++const reports: Report[] = [];
++// blocker id -> ids of users they blocked
++const blocks = new Map<string, Set<string>>();
+ 
+ export const db = {
+   createUser(u: Omit<User, "id" | "plan">): User {
+@@ -29,15 +45,61 @@ export const db = {
+     const u = users.get(id);
+     if (u) users.set(id, { ...u, ...patch });
+   },
++  deleteUser(id: string) {
++    users.delete(id);
++    blocks.delete(id);
++    for (const blocked of blocks.values()) blocked.delete(id);
++  },
+   waitlistEmails(): string[] {
+     return [...waitlist];
+   },
++  unsubscribe(email: string) {
++    unsubscribed.add(email.toLowerCase());
++  },
++  isUnsubscribed(email: string): boolean {
++    return unsubscribed.has(email.toLowerCase());
++  },
++  addReport(r: Report) {
++    reports.push(r);
++  },
++  block(blockerId: string, blockedId: string) {
++    const set = blocks.get(blockerId) ?? new Set<string>();
++    set.add(blockedId);
++    blocks.set(blockerId, set);
++  },
++  isBlocked(viewerId: string, authorId: string): boolean {
++    return blocks.get(viewerId)?.has(authorId) ?? false;
++  },
+ };
+ 
++function scrypt(pw: string, salt: Buffer): Promise<Buffer> {
++  return new Promise((resolve, reject) =>
++    scryptCallback(pw, salt, 64, (err, key) => (err ? reject(err) : resolve(key))),
++  );
++}
++
++// scrypt is deliberately slow; plain SHA-256 is fast enough to brute-force leaked hashes.
+ export async function hashPassword(pw: string): Promise<string> {
+-  const data = new TextEncoder().encode(pw);
+-  const digest = await crypto.subtle.digest("SHA-256", data);
+-  return Buffer.from(digest).toString("hex");
++  const salt = randomBytes(16);
++  const key = await scrypt(pw, salt);
++  return `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
++}
++
++// Accepts old SHA-256 hashes too; a login route should re-hash when needsRehash is true.
++export async function verifyPassword(
++  pw: string,
++  stored: string,
++): Promise<{ ok: boolean; needsRehash: boolean }> {
++  if (stored.startsWith("scrypt$")) {
++    const [, saltHex, keyHex] = stored.split("$");
++    const key = await scrypt(pw, Buffer.from(saltHex, "hex"));
++    const expected = Buffer.from(keyHex, "hex");
++    return { ok: key.length === expected.length && timingSafeEqual(key, expected), needsRehash: false };
++  }
++  const legacy = Buffer.from(createHash("sha256").update(pw).digest("hex"));
++  const expected = Buffer.from(stored);
++  const ok = legacy.length === expected.length && timingSafeEqual(legacy, expected);
++  return { ok, needsRehash: ok };
+ }
+ 
+ // Demo only: a real app would read the session cookie.
+diff --git a/lib/legal.ts b/lib/legal.ts
+new file mode 100644
+index 0000000..f979a6b
+--- /dev/null
++++ b/lib/legal.ts
+@@ -0,0 +1,19 @@
++// Real-world details the legal pages and emails need (address, contacts, DMCA agent).
++// Never ship the placeholder: a missing value throws in production.
++export function legalDetail(name: string): string {
++  const value = process.env[name];
++  if (value) return value;
++  if (process.env.NODE_ENV === "production") {
++    throw new Error(`${name} is not set (see .env.example)`);
++  }
++  return `TODO(legal-check): set ${name}`;
++}
++
++export function appBaseUrl(): string {
++  const url = process.env.NEXT_PUBLIC_APP_URL;
++  if (url) return url;
++  if (process.env.NODE_ENV === "production") {
++    throw new Error("NEXT_PUBLIC_APP_URL is not set");
++  }
++  return "http://localhost:3000";
++}
+diff --git a/lib/rate-limit.ts b/lib/rate-limit.ts
+new file mode 100644
+index 0000000..74135ef
+--- /dev/null
++++ b/lib/rate-limit.ts
+@@ -0,0 +1,26 @@
++// In-memory limiter: per server instance, reset on restart. Swap for a shared store
++// (e.g. @upstash/ratelimit) when running more than one instance.
++const buckets = new Map<string, { count: number; resetAt: number }>();
++
++export function rateLimit(
++  key: string,
++  limit = 5,
++  windowMs = 15 * 60 * 1000,
++): { ok: true } | { ok: false; retryAfterSeconds: number } {
++  const now = Date.now();
++  const bucket = buckets.get(key);
++  if (!bucket || bucket.resetAt <= now) {
++    buckets.set(key, { count: 1, resetAt: now + windowMs });
++    return { ok: true };
++  }
++  if (bucket.count >= limit) {
++    return { ok: false, retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000) };
++  }
++  bucket.count++;
++  return { ok: true };
++}
++
++// Vercel, Netlify and Cloudflare set X-Forwarded-For; the first value is the client.
++export function clientIp(req: Request): string {
++  return req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
++}
+diff --git a/lib/unsubscribe.ts b/lib/unsubscribe.ts
+new file mode 100644
+index 0000000..d6ef4f3
+--- /dev/null
++++ b/lib/unsubscribe.ts
+@@ -0,0 +1,22 @@
++import { createHmac, timingSafeEqual } from "node:crypto";
++
++function secret(): string {
++  const s = process.env.UNSUBSCRIBE_SECRET;
++  if (!s) throw new Error("UNSUBSCRIBE_SECRET is not set");
++  return s;
++}
++
++// Signed per address so nobody can unsubscribe someone else.
++export function unsubscribeToken(email: string): string {
++  return createHmac("sha256", secret()).update(email.toLowerCase()).digest("hex");
++}
++
++export function verifyUnsubscribeToken(email: string, token: string): boolean {
++  const expected = Buffer.from(unsubscribeToken(email));
++  const given = Buffer.from(token);
++  return given.length === expected.length && timingSafeEqual(given, expected);
++}
++
++export function unsubscribeQuery(email: string): string {
++  return `email=${encodeURIComponent(email)}&token=${unsubscribeToken(email)}`;
++}

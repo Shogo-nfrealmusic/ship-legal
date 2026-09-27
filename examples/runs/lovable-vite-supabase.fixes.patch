@@ -1,0 +1,1054 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..4a9e3d2
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,7 @@
++# Browser (public by design)
++VITE_SUPABASE_URL=
++VITE_SUPABASE_ANON_KEY=
++
++# Edge Function secrets — set with `supabase secrets set`, never with a VITE_ prefix
++OPENAI_API_KEY=
++ADMIN_EMAILS=
+diff --git a/.gitignore b/.gitignore
+index 1f6f14d..b1640b5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,4 @@
+ node_modules
+ dist
++.env
+ .env.local
+diff --git a/index.html b/index.html
+index 0f4074f..ecfcdb8 100644
+--- a/index.html
++++ b/index.html
+@@ -2,21 +2,9 @@
+ <html lang="en">
+   <head>
+     <meta charset="UTF-8" />
+-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+     <title>ChatFit Coach — your AI personal trainer</title>
+-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet" />
+-    <!-- Meta Pixel Code -->
+-    <script>
+-      !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+-      n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+-      n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+-      t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+-      document,'script','https://connect.facebook.net/en_US/fbevents.js');
+-      fbq('init', '123456789012345');
+-      fbq('track', 'PageView');
+-    </script>
+-    <!-- End Meta Pixel Code -->
++    <!-- Meta Pixel loads from src/lib/consent.ts, only after the visitor accepts ad cookies. -->
+   </head>
+   <body>
+     <div id="root"></div>
+diff --git a/src/components/ConsentBanner.tsx b/src/components/ConsentBanner.tsx
+new file mode 100644
+index 0000000..fe2f186
+--- /dev/null
++++ b/src/components/ConsentBanner.tsx
+@@ -0,0 +1,33 @@
++import { useEffect, useState } from "react";
++import { Link } from "react-router-dom";
++import { getConsent, loadTrackers, setConsent, type Consent } from "@/lib/consent";
++
++export default function ConsentBanner() {
++  const [open, setOpen] = useState(false);
++
++  useEffect(() => {
++    if (getConsent() === null) setOpen(true);
++    else loadTrackers();
++    const onOpen = () => setOpen(true);
++    window.addEventListener("consent:open", onOpen);
++    return () => window.removeEventListener("consent:open", onOpen);
++  }, []);
++
++  if (!open) return null;
++
++  function choose(c: Consent) {
++    setConsent(c);
++    setOpen(false);
++  }
++
++  return (
++    <div role="dialog" aria-label="Cookie consent" className="consent">
++      <p>
++        We use cookies for ads (Meta Pixel) to measure our marketing.{" "}
++        <Link to="/privacy">Privacy Policy</Link>
++      </p>
++      <button type="button" onClick={() => choose("yes")}>Accept</button>{" "}
++      <button type="button" onClick={() => choose("no")}>Decline</button>
++    </div>
++  );
++}
+diff --git a/src/components/Footer.tsx b/src/components/Footer.tsx
+new file mode 100644
+index 0000000..1a37d66
+--- /dev/null
++++ b/src/components/Footer.tsx
+@@ -0,0 +1,13 @@
++import { Link } from "react-router-dom";
++import { openConsentSettings } from "@/lib/consent";
++
++export default function Footer() {
++  return (
++    <footer className="site-footer">
++      <Link to="/privacy">Privacy Policy</Link> · <Link to="/terms">Terms</Link> ·{" "}
++      <Link to="/dmca">DMCA</Link> · <Link to="/privacy-choices">Your Privacy Choices</Link> ·{" "}
++      <button type="button" className="link-btn" onClick={openConsentSettings}>Cookie settings</button> ·{" "}
++      <Link to="/account">Account</Link>
++    </footer>
++  );
++}
+diff --git a/src/index.css b/src/index.css
+index b9ae121..a8efe24 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -1,6 +1,15 @@
++/* Poppins, self-hosted (no requests to Google). Until the files are in public/fonts, the
++   browser falls back to sans-serif. */
++@font-face { font-family: "Poppins"; src: url("/fonts/poppins-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
++@font-face { font-family: "Poppins"; src: url("/fonts/poppins-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
++@font-face { font-family: "Poppins"; src: url("/fonts/poppins-700.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+ body { margin: 0; font-family: "Poppins", sans-serif; background: #0f0f10; color: #eee; }
+ main { max-width: 680px; margin: 0 auto; padding: 32px 16px; }
+-button { background: #22c55e; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
+-button:focus, a:focus, input:focus { outline: none; }
+-.muted { color: #555; }
+-input, textarea { display: block; width: 100%; margin: 8px 0; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; }
++button { background: #22c55e; color: #0f0f10; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
++:focus-visible { outline: 3px solid #22c55e; outline-offset: 2px; }
++.muted { color: #9a9a9a; }
++input, textarea, select { display: block; width: 100%; margin: 8px 0; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; }
++a { color: #4ade80; }
++.link-btn { background: none; color: #4ade80; padding: 0; text-decoration: underline; }
++.site-footer { max-width: 680px; margin: 0 auto; padding: 16px; color: #9a9a9a; }
++.consent { position: fixed; bottom: 0; left: 0; right: 0; padding: 16px; background: #1a1a1a; border-top: 1px solid #333; }
+diff --git a/src/lib/consent.ts b/src/lib/consent.ts
+new file mode 100644
+index 0000000..faca5f2
+--- /dev/null
++++ b/src/lib/consent.ts
+@@ -0,0 +1,43 @@
++// Ad trackers load only after the visitor clicks Accept, and never with Global Privacy Control.
++const KEY = "consent";
++export type Consent = "yes" | "no";
++
++let pixelLoaded = false;
++
++export function getConsent(): Consent | null {
++  const v = localStorage.getItem(KEY);
++  return v === "yes" || v === "no" ? v : null;
++}
++
++function gpcOn() {
++  return (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true;
++}
++
++export function setConsent(c: Consent) {
++  localStorage.setItem(KEY, c);
++  if (c === "yes") loadTrackers();
++  // A loaded pixel can't be unloaded; reload the page without it.
++  else if (pixelLoaded) location.reload();
++}
++
++export function loadTrackers() {
++  if (getConsent() !== "yes" || gpcOn() || pixelLoaded) return;
++  pixelLoaded = true;
++  loadMetaPixel();
++}
++
++export function openConsentSettings() {
++  window.dispatchEvent(new Event("consent:open"));
++}
++
++function loadMetaPixel() {
++  const s = document.createElement("script");
++  s.text = `!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
++n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
++n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
++t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
++document,'script','https://connect.facebook.net/en_US/fbevents.js');
++fbq('init', '123456789012345');
++fbq('track', 'PageView');`;
++  document.head.appendChild(s);
++}
+diff --git a/src/lib/legal.ts b/src/lib/legal.ts
+new file mode 100644
+index 0000000..7829c3c
+--- /dev/null
++++ b/src/lib/legal.ts
+@@ -0,0 +1,16 @@
++// Real-world details for the legal pages. Fill these in; the pages refuse to render in a
++// production build while any of them is empty, so placeholder text never reaches users.
++export const LEGAL = {
++  company: "", // TODO(legal-check): legal name of the business
++  contactEmail: "", // TODO(legal-check): monitored email for privacy requests and reports
++  effectiveDate: "", // TODO(legal-check): date these policies take effect
++  governingLaw: "", // TODO(legal-check): e.g. "the State of California, USA"
++  // TODO(legal-check): must match your registration at dmca.copyright.gov
++  dmcaAgent: { name: "", address: "", phone: "", email: "" },
++};
++
++export function required(value: string, what: string) {
++  if (value) return value;
++  if (import.meta.env.PROD) throw new Error(`legal-check: set ${what} in src/lib/legal.ts`);
++  return `TODO(legal-check): ${what}`;
++}
+diff --git a/src/lib/openai.ts b/src/lib/openai.ts
+index 1ea310c..001395a 100644
+--- a/src/lib/openai.ts
++++ b/src/lib/openai.ts
+@@ -1,19 +1,8 @@
+-// Calls OpenAI straight from the browser so we don't need a backend.
+-export async function askCoach(messages: { role: "user" | "assistant" | "system"; content: string }[]) {
+-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+-    method: "POST",
+-    headers: {
+-      "Content-Type": "application/json",
+-      Authorization: `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
+-    },
+-    body: JSON.stringify({
+-      model: "gpt-4o-mini",
+-      messages: [
+-        { role: "system", content: "You are Coach Max, a friendly human personal trainer. Never say you are an AI." },
+-        ...messages,
+-      ],
+-    }),
+-  });
+-  const data = await res.json();
+-  return data.choices?.[0]?.message?.content as string;
++import { supabase } from "@/lib/supabase";
++
++// The OpenAI call runs in the `coach` Edge Function so the API key stays on the server.
++export async function askCoach(messages: { role: "user" | "assistant"; content: string }[]) {
++  const { data, error } = await supabase.functions.invoke("coach", { body: { messages } });
++  if (error) throw error;
++  return data.reply as string;
+ }
+diff --git a/src/main.tsx b/src/main.tsx
+index 570e13c..a6304bc 100644
+--- a/src/main.tsx
++++ b/src/main.tsx
+@@ -7,6 +7,13 @@ import Signup from "./pages/Signup";
+ import Coach from "./pages/Coach";
+ import Feed from "./pages/Feed";
+ import Admin from "./pages/Admin";
++import Account from "./pages/Account";
++import Privacy from "./pages/Privacy";
++import PrivacyChoices from "./pages/PrivacyChoices";
++import Terms from "./pages/Terms";
++import Dmca from "./pages/Dmca";
++import Footer from "./components/Footer";
++import ConsentBanner from "./components/ConsentBanner";
+ 
+ createRoot(document.getElementById("root")!).render(
+   <StrictMode>
+@@ -17,7 +24,14 @@ createRoot(document.getElementById("root")!).render(
+         <Route path="/coach" element={<Coach />} />
+         <Route path="/feed" element={<Feed />} />
+         <Route path="/admin" element={<Admin />} />
++        <Route path="/account" element={<Account />} />
++        <Route path="/privacy" element={<Privacy />} />
++        <Route path="/privacy-choices" element={<PrivacyChoices />} />
++        <Route path="/terms" element={<Terms />} />
++        <Route path="/dmca" element={<Dmca />} />
+       </Routes>
++      <Footer />
++      <ConsentBanner />
+     </BrowserRouter>
+   </StrictMode>,
+ );
+diff --git a/src/pages/Account.tsx b/src/pages/Account.tsx
+new file mode 100644
+index 0000000..c3ce74f
+--- /dev/null
++++ b/src/pages/Account.tsx
+@@ -0,0 +1,44 @@
++import { useState } from "react";
++import { useNavigate } from "react-router-dom";
++import { supabase } from "@/lib/supabase";
++
++export default function Account() {
++  const nav = useNavigate();
++  const [message, setMessage] = useState("");
++
++  async function download() {
++    const { data: { user } } = await supabase.auth.getUser();
++    if (!user) return setMessage("Sign in to download your data.");
++    const [profile, posts, blocks] = await Promise.all([
++      supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
++      supabase.from("posts").select("*").eq("user_id", user.id),
++      supabase.from("blocks").select("*"),
++    ]);
++    const json = JSON.stringify(
++      { account: { id: user.id, email: user.email, created_at: user.created_at }, profile: profile.data, posts: posts.data, blocks: blocks.data },
++      null,
++      2,
++    );
++    const a = document.createElement("a");
++    a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
++    a.download = "chatfit-data.json";
++    a.click();
++  }
++
++  async function deleteAccount() {
++    if (!window.confirm("Delete your account, posts and photos permanently? This can't be undone.")) return;
++    const { error } = await supabase.functions.invoke("delete-account");
++    if (error) return setMessage("Could not delete your account. Are you signed in?");
++    await supabase.auth.signOut();
++    nav("/");
++  }
++
++  return (
++    <main>
++      <h2>Your account</h2>
++      <button type="button" onClick={download}>Download my data</button>{" "}
++      <button type="button" onClick={deleteAccount}>Delete my account</button>
++      {message && <p role="alert">{message}</p>}
++    </main>
++  );
++}
+diff --git a/src/pages/Admin.tsx b/src/pages/Admin.tsx
+index 45d8f83..f8e26fa 100644
+--- a/src/pages/Admin.tsx
++++ b/src/pages/Admin.tsx
+@@ -1,12 +1,18 @@
+ import { useEffect, useState } from "react";
+ import { supabase } from "@/lib/supabase";
+ 
+-// Admin dashboard: all users and their emails.
++// Admin dashboard: all users and their emails, served by the `admin-users` Edge Function,
++// which checks the caller against ADMIN_EMAILS on the server.
+ export default function Admin() {
+   const [users, setUsers] = useState<{ id: string; username: string; email: string }[]>([]);
++  const [denied, setDenied] = useState(false);
+   useEffect(() => {
+-    supabase.from("profiles").select("id, username, email").then(({ data }) => setUsers(data ?? []));
++    supabase.functions.invoke("admin-users").then(({ data, error }) => {
++      if (error) setDenied(true);
++      else setUsers(data.users ?? []);
++    });
+   }, []);
++  if (denied) return <main><h2>Not authorized</h2></main>;
+   return (
+     <main>
+       <h2>Admin</h2>
+diff --git a/src/pages/Coach.tsx b/src/pages/Coach.tsx
+index 3a3b76e..87abe6a 100644
+--- a/src/pages/Coach.tsx
++++ b/src/pages/Coach.tsx
+@@ -4,25 +4,34 @@ import { askCoach } from "@/lib/openai";
+ type Msg = { role: "user" | "assistant"; content: string };
+ 
+ export default function Coach() {
+-  const [msgs, setMsgs] = useState<Msg[]>([{ role: "assistant", content: "Hey! I'm Max, your coach. What's your goal?" }]);
++  const [msgs, setMsgs] = useState<Msg[]>([{ role: "assistant", content: "Hey! I'm Max, your AI coach. What's your goal?" }]);
+   const [text, setText] = useState("");
++  const [error, setError] = useState("");
+ 
+   async function send() {
+     const next: Msg[] = [...msgs, { role: "user", content: text }];
+     setMsgs(next);
+     setText("");
+-    const reply = await askCoach(next);
+-    setMsgs([...next, { role: "assistant", content: reply }]);
++    setError("");
++    try {
++      const reply = await askCoach(next);
++      setMsgs([...next, { role: "assistant", content: reply }]);
++    } catch {
++      setError("Coach Max is unavailable. Are you signed in?");
++    }
+   }
+ 
+   return (
+     <main>
+       <h2>Coach Max</h2>
++      <p className="muted">You're chatting with an AI assistant. It can make mistakes and isn't medical advice.</p>
+       {msgs.map((m, i) => (
+-        <p key={i}><b>{m.role === "user" ? "You" : "Max"}:</b> {m.content}</p>
++        <p key={i}><b>{m.role === "user" ? "You" : "Max (AI)"}:</b> {m.content}</p>
+       ))}
+-      <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask Max…" />
+-      <div onClick={send} className="send-btn">➤</div>
++      {error && <p role="alert">{error}</p>}
++      <label htmlFor="coach-input">Message to Max (AI)</label>
++      <input id="coach-input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask Max…" />
++      <button type="button" onClick={send} className="send-btn" aria-label="Send">➤</button>
+     </main>
+   );
+ }
+diff --git a/src/pages/Dmca.tsx b/src/pages/Dmca.tsx
+new file mode 100644
+index 0000000..fcbd936
+--- /dev/null
++++ b/src/pages/Dmca.tsx
+@@ -0,0 +1,41 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++import { LEGAL, required } from "@/lib/legal";
++
++export default function Dmca() {
++  const agent = LEGAL.dmcaAgent;
++  return (
++    <main>
++      <h2>Copyright (DMCA) Policy</h2>
++      <p>If you believe content on ChatFit Coach infringes your copyright, send a written notice to our designated agent:</p>
++      <address>
++        {required(agent.name, "DMCA agent name")}<br />
++        {required(agent.address, "DMCA agent postal address")}<br />
++        {required(agent.phone, "DMCA agent phone")}<br />
++        {required(agent.email, "DMCA agent email")}
++      </address>
++
++      <h3>Your notice must include</h3>
++      <ol>
++        <li>The copyrighted work you say is infringed.</li>
++        <li>The URL of the material on ChatFit Coach you want removed.</li>
++        <li>Your name, postal address, phone number and email.</li>
++        <li>A statement that you have a good-faith belief the use is not authorized by the owner, its agent, or the law.</li>
++        <li>A statement that the information in the notice is accurate and, under penalty of perjury, that you are the owner or authorized to act for the owner.</li>
++        <li>Your physical or electronic signature.</li>
++      </ol>
++
++      <h3>Counter-notice</h3>
++      <p>
++        If your content was removed and you believe it was a mistake or misidentification, send the
++        agent a counter-notice with: the removed material and where it appeared; a statement under
++        penalty of perjury that you have a good-faith belief it was removed by mistake or
++        misidentification; your name, address and phone; consent to the jurisdiction of the federal
++        court for your district (or, outside the US, any district where we may be found) and to accept
++        service from the complainant; and your signature.
++      </p>
++
++      <h3>Repeat infringers</h3>
++      <p>We terminate the accounts of users who repeatedly infringe copyrights, in appropriate circumstances.</p>
++    </main>
++  );
++}
+diff --git a/src/pages/Feed.tsx b/src/pages/Feed.tsx
+index 11f2c1c..c25a3a6 100644
+--- a/src/pages/Feed.tsx
++++ b/src/pages/Feed.tsx
+@@ -1,41 +1,67 @@
+ import { useEffect, useState } from "react";
+ import { supabase } from "@/lib/supabase";
+ 
+-type Post = { id: string; username: string; body: string; photo_url: string | null };
++type Post = { id: string; user_id: string; username: string; body: string; photo_url: string | null };
+ 
+ export default function Feed() {
+   const [posts, setPosts] = useState<Post[]>([]);
++  const [blocked, setBlocked] = useState<Set<string>>(new Set());
+   const [body, setBody] = useState("");
++  const [error, setError] = useState("");
+ 
+   useEffect(() => {
+     supabase.from("posts").select("*").order("created_at", { ascending: false }).then(({ data }) => setPosts(data ?? []));
++    supabase.from("blocks").select("blocked_id").then(({ data }) => setBlocked(new Set((data ?? []).map((b) => b.blocked_id))));
+   }, []);
+ 
+   async function share(e: React.FormEvent) {
+     e.preventDefault();
++    setError("");
++    const { data: { user } } = await supabase.auth.getUser();
++    if (!user) return setError("Sign in to post.");
+     const file = (document.getElementById("photo") as HTMLInputElement).files?.[0];
+     let photo_url: string | null = null;
+     if (file) {
+-      const { data } = await supabase.storage.from("photos").upload(`${Date.now()}-${file.name}`, file);
++      const { data } = await supabase.storage.from("photos").upload(`${user.id}/${Date.now()}-${file.name}`, file);
+       photo_url = data ? supabase.storage.from("photos").getPublicUrl(data.path).data.publicUrl : null;
+     }
+-    await supabase.from("posts").insert({ body, photo_url });
++    const { error } = await supabase.from("posts").insert({ body, photo_url });
++    if (error) return setError("Could not post.");
+     setBody("");
+   }
+ 
++  async function report(p: Post) {
++    const reason = window.prompt("Why are you reporting this post?");
++    if (!reason) return;
++    const { error } = await supabase.from("reports").insert({ post_id: p.id, reported_user_id: p.user_id, reason: reason.slice(0, 500) });
++    window.alert(error ? "Sign in to report posts." : "Thanks. We'll review this report.");
++  }
++
++  async function block(p: Post) {
++    if (!window.confirm(`Block @${p.username}? You won't see their posts.`)) return;
++    const { error } = await supabase.from("blocks").insert({ blocked_id: p.user_id });
++    if (error) return window.alert("Sign in to block users.");
++    setBlocked(new Set([...blocked, p.user_id]));
++  }
++
+   return (
+     <main>
+       <h2>Community</h2>
+       <form onSubmit={share}>
+-        <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Share your workout" />
++        <label htmlFor="post-body">Your post</label>
++        <textarea id="post-body" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Share your workout" />
++        <label htmlFor="photo">Photo (optional)</label>
+         <input id="photo" type="file" accept="image/*" />
++        {error && <p role="alert">{error}</p>}
+         <button type="submit">Post</button>
+       </form>
+-      {posts.map((p) => (
++      {posts.filter((p) => !blocked.has(p.user_id)).map((p) => (
+         <article key={p.id}>
+           <b>@{p.username}</b>
+           <p>{p.body}</p>
+-          {p.photo_url && <img src={p.photo_url} />}
++          {p.photo_url && <img src={p.photo_url} alt={`Workout photo shared by @${p.username}`} />}
++          <button type="button" className="link-btn" onClick={() => report(p)}>Report</button>{" "}
++          <button type="button" className="link-btn" onClick={() => block(p)}>Block</button>
+         </article>
+       ))}
+     </main>
+diff --git a/src/pages/Landing.tsx b/src/pages/Landing.tsx
+index bf4773d..4ab4e5c 100644
+--- a/src/pages/Landing.tsx
++++ b/src/pages/Landing.tsx
+@@ -1,5 +1,7 @@
+ import { Link } from "react-router-dom";
+ 
++// TODO(legal-check): confirm each quote is from a real customer with a real result, and that
++// you have permission to use it; remove any that aren't. Disclose if reviewers got anything.
+ const testimonials = [
+   { name: "Jessica M.", text: "Lost 12 kg in 8 weeks with Coach Max!", stars: 5 },
+   { name: "David K.", text: "Better than my $100/hour trainer.", stars: 5 },
+@@ -9,9 +11,10 @@ const testimonials = [
+ export default function Landing() {
+   return (
+     <main>
+-      <img src="/hero.png" width={680} height={320} />
+-      <h1>Your AI-free personal trainer, 24/7</h1>
+-      <p>Trusted by 50,000+ athletes. Guaranteed results in 30 days.</p>
++      <img src="/hero.png" width={680} height={320} alt="TODO(legal-check): describe image" />
++      <h1>Your AI personal trainer, 24/7</h1>
++      {/* TODO(legal-check): substantiate "50,000+ athletes" or remove it. */}
++      <p>Trusted by 50,000+ athletes.</p>
+       <Link to="/signup"><button>Start free</button></Link>
+       <section>
+         {testimonials.map((t) => (
+diff --git a/src/pages/Privacy.tsx b/src/pages/Privacy.tsx
+new file mode 100644
+index 0000000..597e31b
+--- /dev/null
++++ b/src/pages/Privacy.tsx
+@@ -0,0 +1,62 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++import { Link } from "react-router-dom";
++import { LEGAL, required } from "@/lib/legal";
++
++export default function Privacy() {
++  const contact = required(LEGAL.contactEmail, "contact email");
++  return (
++    <main>
++      <h2>Privacy Policy</h2>
++      <p>Effective {required(LEGAL.effectiveDate, "effective date")}. We review this policy at least every 12 months.</p>
++      <p>This policy explains what {required(LEGAL.company, "company name")} ("we") collects through ChatFit Coach.</p>
++
++      <h3>What we collect</h3>
++      <ul>
++        <li>Account: email address, username and password (the password is handled by our auth provider, Supabase).</li>
++        <li>Age screen: your birth month and year are used once to check you are 13 or older. We store only the result, not the date.</li>
++        <li>Posts: text and photos you share in the Community feed. Posts, photos and your username are public.</li>
++        <li>Coach chats: messages you send to Coach Max.</li>
++        <li>Advertising: if you accept ad cookies, the Meta Pixel collects page views and device/browser data.</li>
++        <li>Reports and blocks you make.</li>
++      </ul>
++
++      <h3>Who receives it</h3>
++      <ul>
++        <li>Supabase — hosting, database, file storage and sign-in.</li>
++        <li>OpenAI — receives your Coach Max messages to generate replies (Coach Max is an AI).</li>
++        <li>Meta Platforms — receives ad-tracking data, only if you accept ad cookies.</li>
++      </ul>
++
++      <h3>Cookies and trackers</h3>
++      <p>
++        The Meta Pixel loads only after you click Accept. You can change your choice any time via
++        "Cookie settings" in the footer. We honor Global Privacy Control signals as an opt-out.
++      </p>
++
++      <h3>Your rights</h3>
++      <p>
++        You can download your data or delete your account on the <Link to="/account">Account</Link> page.
++        For other requests (access, correction) contact {contact}.
++      </p>
++      <p>TODO(legal-check): how long you keep data and backups after deletion.</p>
++
++      <h3>California residents</h3>
++      <p>
++        Categories collected: identifiers (email, username), user content (posts, photos, chat
++        messages), and internet activity (page views via the Meta Pixel, with consent). Sources: you
++        and your device. Purposes: providing the service, the AI coach, community features, safety,
++        and advertising measurement. Recipients: the providers listed above. We do not sell personal
++        information for money; sending data to Meta for advertising may count as "sharing". You have
++        the right to know, delete, correct, and opt out of sale or sharing — use{" "}
++        <Link to="/privacy-choices">Your Privacy Choices</Link>, the Account page, or contact {contact}.
++        We won't discriminate against you for using these rights.
++      </p>
++
++      <h3>Children</h3>
++      <p>ChatFit Coach is not directed to children under 13, and we do not knowingly collect data from them.</p>
++
++      <h3>Contact</h3>
++      <p>{contact}</p>
++    </main>
++  );
++}
+diff --git a/src/pages/PrivacyChoices.tsx b/src/pages/PrivacyChoices.tsx
+new file mode 100644
+index 0000000..595ae53
+--- /dev/null
++++ b/src/pages/PrivacyChoices.tsx
+@@ -0,0 +1,26 @@
++import { useState } from "react";
++import { getConsent, setConsent } from "@/lib/consent";
++
++// "Your Privacy Choices" / Do Not Sell or Share My Personal Information (CCPA).
++export default function PrivacyChoices() {
++  const [choice, setChoice] = useState(getConsent());
++
++  function optOut() {
++    setConsent("no");
++    setChoice("no");
++  }
++
++  return (
++    <main>
++      <h2>Your Privacy Choices</h2>
++      <p>
++        We use the Meta Pixel for advertising only if you accept ad cookies. Sending data to ad
++        platforms can count as "sharing" personal information under California law. You can opt
++        out of this sharing here (Do Not Sell or Share My Personal Information). If your browser
++        sends a Global Privacy Control signal, we treat it as an opt-out automatically.
++      </p>
++      <p>Current setting: {choice === "yes" ? "ad cookies allowed" : "opted out of ad sharing"}</p>
++      <button type="button" onClick={optOut}>Do Not Sell or Share My Personal Information</button>
++    </main>
++  );
++}
+diff --git a/src/pages/Signup.tsx b/src/pages/Signup.tsx
+index 4a018fa..ed7f861 100644
+--- a/src/pages/Signup.tsx
++++ b/src/pages/Signup.tsx
+@@ -1,30 +1,79 @@
+ import { useState } from "react";
+-import { useNavigate } from "react-router-dom";
++import { Link, useNavigate } from "react-router-dom";
+ import { supabase } from "@/lib/supabase";
+ 
++const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
++const THIS_YEAR = new Date().getFullYear();
++const YEARS = Array.from({ length: THIS_YEAR - 1900 + 1 }, (_, i) => THIS_YEAR - i);
++const BLOCK_KEY = "signup_blocked_until";
++
++function isBlocked() {
++  return Number(localStorage.getItem(BLOCK_KEY) ?? 0) > Date.now();
++}
++
+ export default function Signup() {
+   const nav = useNavigate();
+   const [email, setEmail] = useState("");
+   const [password, setPassword] = useState("");
+   const [username, setUsername] = useState("");
++  const [birthMonth, setBirthMonth] = useState("");
++  const [birthYear, setBirthYear] = useState("");
+   const [error, setError] = useState("");
++  const [notice, setNotice] = useState(isBlocked() ? "Sorry, we can't create an account for you right now." : "");
+ 
+   async function submit(e: React.FormEvent) {
+     e.preventDefault();
+-    const { data, error } = await supabase.auth.signUp({ email, password });
+-    if (error) return setError(error.message);
+-    await supabase.from("profiles").insert({ id: data.user?.id, username, email });
++    if (isBlocked()) return setNotice("Sorry, we can't create an account for you right now.");
++    const { data, error } = await supabase.functions.invoke("signup", {
++      body: { email, password, username, birthMonth: Number(birthMonth), birthYear: Number(birthYear) },
++    });
++    if (error) {
++      const body = await error.context?.json?.().catch(() => null);
++      return setError(body?.error ?? "Sign-up failed");
++    }
++    if (data.blocked) {
++      localStorage.setItem(BLOCK_KEY, String(Date.now() + 24 * 60 * 60 * 1000));
++      return setNotice("Sorry, we can't create an account for you right now.");
++    }
++    if (!data.session) return setNotice("Check your email to confirm your account.");
++    await supabase.auth.setSession(data.session);
+     nav("/coach");
+   }
+ 
++  if (notice) {
++    return (
++      <main>
++        <h1>Create your account</h1>
++        <p>{notice}</p>
++      </main>
++    );
++  }
++
+   return (
+     <main>
+       <h1>Create your account</h1>
+       <form onSubmit={submit}>
+-        <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+-        <input placeholder="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+-        <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+-        {error && <p>{error}</p>}
++        <label htmlFor="username">Username</label>
++        <input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
++        <label htmlFor="email">Email</label>
++        <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
++        <label htmlFor="password">Password</label>
++        <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
++        <label htmlFor="birth-month">Birth month</label>
++        <select id="birth-month" value={birthMonth} onChange={(e) => setBirthMonth(e.target.value)} required>
++          <option value="">Month</option>
++          {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
++        </select>
++        <label htmlFor="birth-year">Birth year</label>
++        <select id="birth-year" value={birthYear} onChange={(e) => setBirthYear(e.target.value)} required>
++          <option value="">Year</option>
++          {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
++        </select>
++        {error && <p role="alert">{error}</p>}
++        <p>
++          By signing up you agree to the <Link to="/terms">Terms</Link> and{" "}
++          <Link to="/privacy">Privacy Policy</Link>.
++        </p>
+         <button type="submit">Sign up</button>
+       </form>
+     </main>
+diff --git a/src/pages/Terms.tsx b/src/pages/Terms.tsx
+new file mode 100644
+index 0000000..464121f
+--- /dev/null
++++ b/src/pages/Terms.tsx
+@@ -0,0 +1,49 @@
++// DRAFT generated by /legal-check. Have a lawyer review before relying on it.
++import { Link } from "react-router-dom";
++import { LEGAL, required } from "@/lib/legal";
++
++export default function Terms() {
++  const contact = required(LEGAL.contactEmail, "contact email");
++  return (
++    <main>
++      <h2>Terms of Service</h2>
++      <p>Effective {required(LEGAL.effectiveDate, "effective date")}. These terms are between you and {required(LEGAL.company, "company name")}.</p>
++
++      <h3>Who may use ChatFit Coach</h3>
++      <p>You must be at least 13 years old to create an account.</p>
++
++      <h3>Coach Max is an AI</h3>
++      <p>Coach Max is an AI assistant. It can make mistakes and is not medical advice. Check with a doctor before starting a new exercise or diet program.</p>
++
++      <h3>Acceptable use</h3>
++      <p>Don't post content that is illegal, harassing, hateful, sexually explicit, or that you don't have the rights to. Don't misuse or try to break the service.</p>
++
++      <h3>Your content</h3>
++      <p>
++        You keep ownership of what you post. You must have the rights to it. You give us a license
++        to host, display and distribute it in order to run the service. We may remove content or
++        accounts that break these terms. Copyright complaints: see our <Link to="/dmca">DMCA policy</Link>.
++      </p>
++
++      <h3>Reports</h3>
++      <p>
++        Use "Report" on any post or write to {contact}. We review reports promptly and remove content
++        that breaks these rules, including intimate images shared without consent, which we remove
++        within 48 hours of a valid request.
++      </p>
++
++      <h3>No warranty</h3>
++      <p>The service is provided "as is" and "as available", without warranties of any kind, to the extent the law allows.</p>
++
++      <h3>Limitation of liability</h3>
++      {/* TODO(legal-check): decide with a lawyer whether to add a cap on total liability. */}
++      <p>To the extent the law allows, we are not liable for indirect, incidental, or consequential damages.</p>
++
++      <h3>Governing law</h3>
++      <p>These terms are governed by the laws of {required(LEGAL.governingLaw, "governing law")}.</p>
++
++      <h3>Contact</h3>
++      <p>{contact}</p>
++    </main>
++  );
++}
+diff --git a/supabase/functions/_shared/supabase.ts b/supabase/functions/_shared/supabase.ts
+new file mode 100644
+index 0000000..7fe48e6
+--- /dev/null
++++ b/supabase/functions/_shared/supabase.ts
+@@ -0,0 +1,27 @@
++import { createClient } from "npm:@supabase/supabase-js@2";
++
++export const corsHeaders = {
++  "Access-Control-Allow-Origin": "*",
++  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
++};
++
++export function json(body: unknown, status = 200) {
++  return new Response(JSON.stringify(body), {
++    status,
++    headers: { ...corsHeaders, "Content-Type": "application/json" },
++  });
++}
++
++// Service-role client: runs only inside Edge Functions, never shipped to the browser.
++export const admin = createClient(
++  Deno.env.get("SUPABASE_URL")!,
++  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
++);
++
++// The signed-in user who called the function, or null.
++export async function getCaller(req: Request) {
++  const jwt = req.headers.get("Authorization")?.replace("Bearer ", "");
++  if (!jwt) return null;
++  const { data } = await admin.auth.getUser(jwt);
++  return data.user ?? null;
++}
+diff --git a/supabase/functions/admin-users/index.ts b/supabase/functions/admin-users/index.ts
+new file mode 100644
+index 0000000..1e35bde
+--- /dev/null
++++ b/supabase/functions/admin-users/index.ts
+@@ -0,0 +1,21 @@
++// Admin-only list of users. Admins are the emails in the ADMIN_EMAILS secret (comma-separated).
++import { admin, corsHeaders, getCaller, json } from "../_shared/supabase.ts";
++
++const ADMIN_EMAILS = (Deno.env.get("ADMIN_EMAILS") ?? "")
++  .split(",")
++  .map((s) => s.trim().toLowerCase())
++  .filter(Boolean);
++
++Deno.serve(async (req) => {
++  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
++
++  const user = await getCaller(req);
++  if (!user) return json({ error: "Not signed in" }, 401);
++  if (!user.email || !ADMIN_EMAILS.includes(user.email.toLowerCase())) {
++    return json({ error: "Not authorized" }, 403);
++  }
++
++  const { data, error } = await admin.from("profiles").select("id, username, email");
++  if (error) return json({ error: error.message }, 500);
++  return json({ users: data });
++});
+diff --git a/supabase/functions/coach/index.ts b/supabase/functions/coach/index.ts
+new file mode 100644
+index 0000000..74b970e
+--- /dev/null
++++ b/supabase/functions/coach/index.ts
+@@ -0,0 +1,40 @@
++// Calls OpenAI on the server so the API key never reaches the browser.
++import { corsHeaders, getCaller, json } from "../_shared/supabase.ts";
++
++const SYSTEM_PROMPT =
++  "You are Coach Max, an AI personal-trainer assistant. Be friendly and practical. " +
++  "If anyone asks, say plainly that you are an AI, not a human.";
++
++Deno.serve(async (req) => {
++  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
++
++  const user = await getCaller(req);
++  if (!user) return json({ error: "Sign in to chat with Coach Max." }, 401);
++
++  const { messages } = await req.json().catch(() => ({}));
++  if (!Array.isArray(messages) || messages.length === 0 || messages.length > 30) {
++    return json({ error: "Invalid messages" }, 400);
++  }
++  const clean = [];
++  for (const m of messages) {
++    if (!m || (m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string" || m.content.length > 2000) {
++      return json({ error: "Invalid messages" }, 400);
++    }
++    clean.push({ role: m.role, content: m.content });
++  }
++
++  const apiKey = Deno.env.get("OPENAI_API_KEY");
++  if (!apiKey) return json({ error: "Coach is not configured" }, 500);
++
++  const res = await fetch("https://api.openai.com/v1/chat/completions", {
++    method: "POST",
++    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
++    body: JSON.stringify({
++      model: "gpt-4o-mini",
++      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...clean],
++    }),
++  });
++  if (!res.ok) return json({ error: "Coach is unavailable" }, 502);
++  const data = await res.json();
++  return json({ reply: data.choices?.[0]?.message?.content ?? "" });
++});
+diff --git a/supabase/functions/delete-account/index.ts b/supabase/functions/delete-account/index.ts
+new file mode 100644
+index 0000000..29103e0
+--- /dev/null
++++ b/supabase/functions/delete-account/index.ts
+@@ -0,0 +1,28 @@
++// Deletes the caller's photos and auth user. Profile, posts, blocks and reports they filed
++// go with it through `on delete cascade` (see the legal-check migration).
++import { admin, corsHeaders, getCaller, json } from "../_shared/supabase.ts";
++
++Deno.serve(async (req) => {
++  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
++
++  const user = await getCaller(req);
++  if (!user) return json({ error: "Not signed in" }, 401);
++
++  const paths = new Set<string>();
++  const { data: files } = await admin.storage.from("photos").list(user.id, { limit: 1000 });
++  for (const f of files ?? []) paths.add(`${user.id}/${f.name}`);
++  // Photos uploaded before per-user folders existed are found through the user's posts.
++  const { data: posts } = await admin.from("posts").select("photo_url").eq("user_id", user.id);
++  for (const p of posts ?? []) {
++    const path = p.photo_url?.split("/object/public/photos/")[1];
++    if (path) paths.add(decodeURIComponent(path));
++  }
++  if (paths.size > 0) {
++    const { error } = await admin.storage.from("photos").remove([...paths]);
++    if (error) return json({ error: error.message }, 500);
++  }
++
++  const { error } = await admin.auth.admin.deleteUser(user.id);
++  if (error) return json({ error: error.message }, 500);
++  return json({ deleted: true });
++});
+diff --git a/supabase/functions/signup/index.ts b/supabase/functions/signup/index.ts
+new file mode 100644
+index 0000000..797fb45
+--- /dev/null
++++ b/supabase/functions/signup/index.ts
+@@ -0,0 +1,38 @@
++// Sign-up with a neutral age screen (COPPA). Under 13: nothing is created or stored.
++// Only `is_13_plus` is saved, never the birth date.
++import { createClient } from "npm:@supabase/supabase-js@2";
++import { admin, corsHeaders, json } from "../_shared/supabase.ts";
++
++Deno.serve(async (req) => {
++  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
++
++  const { email, password, username, birthMonth, birthYear } = await req.json().catch(() => ({}));
++  const now = new Date();
++  if (
++    typeof email !== "string" || typeof password !== "string" ||
++    typeof username !== "string" || username.trim().length < 1 || username.length > 30 ||
++    !Number.isInteger(birthMonth) || birthMonth < 1 || birthMonth > 12 ||
++    !Number.isInteger(birthYear) || birthYear < 1900 || birthYear > now.getUTCFullYear()
++  ) {
++    return json({ error: "Please fill in every field." }, 400);
++  }
++
++  let age = now.getUTCFullYear() - birthYear;
++  if (now.getUTCMonth() + 1 < birthMonth) age -= 1;
++  if (age < 13) return json({ blocked: true });
++
++  const anon = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!);
++  const { data, error } = await anon.auth.signUp({ email, password });
++  if (error || !data.user) return json({ error: error?.message ?? "Sign-up failed" }, 400);
++  // Supabase returns a user with no identities when the email is already registered.
++  if (data.user.identities?.length === 0) return json({ error: "Could not create this account." }, 400);
++
++  const { error: profileError } = await admin
++    .from("profiles")
++    .insert({ id: data.user.id, username: username.trim(), email, is_13_plus: true });
++  if (profileError) {
++    await admin.auth.admin.deleteUser(data.user.id);
++    return json({ error: "That username is taken." }, 400);
++  }
++  return json({ session: data.session });
++});
+diff --git a/supabase/migrations/20260928000000_legal_check_rls.sql b/supabase/migrations/20260928000000_legal_check_rls.sql
+new file mode 100644
+index 0000000..1ed693d
+--- /dev/null
++++ b/supabase/migrations/20260928000000_legal_check_rls.sql
+@@ -0,0 +1,70 @@
++-- legal-check: Row Level Security, age gate, report/block. Review, then `supabase db push`.
++
++-- profiles: private (holds emails). Users read only their own row. Rows are created by the
++-- `signup` Edge Function (service role) after the age check, so there is no insert policy.
++alter table public.profiles add column is_13_plus boolean not null default false;
++alter table public.profiles drop constraint profiles_id_fkey,
++  add constraint profiles_id_fkey foreign key (id) references auth.users(id) on delete cascade;
++alter table public.profiles enable row level security;
++create policy "profiles: read own" on public.profiles
++  for select to authenticated using (auth.uid() = id);
++
++-- posts: public feed. Only signed-in users who passed the age screen post, as themselves.
++alter table public.posts alter column user_id set default auth.uid();
++alter table public.posts drop constraint posts_user_id_fkey,
++  add constraint posts_user_id_fkey foreign key (user_id) references auth.users(id) on delete cascade;
++alter table public.posts enable row level security;
++create policy "posts: public read" on public.posts for select using (true);
++create policy "posts: insert own if 13+" on public.posts for insert to authenticated
++  with check (
++    auth.uid() = user_id
++    and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_13_plus)
++  );
++create policy "posts: delete own" on public.posts for delete to authenticated
++  using (auth.uid() = user_id);
++
++-- The username shown on a post comes from the author's profile, not from the client.
++create function public.set_post_username() returns trigger
++language plpgsql security definer set search_path = public as $$
++begin
++  new.username := (select username from public.profiles where id = new.user_id);
++  return new;
++end $$;
++create trigger posts_set_username before insert on public.posts
++  for each row execute function public.set_post_username();
++
++-- photos bucket stays public (feed images are public by design). Uploads and deletes only
++-- by signed-in users, inside their own folder `<user id>/...`.
++create policy "photos: upload own folder" on storage.objects for insert to authenticated
++  with check (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
++create policy "photos: delete own" on storage.objects for delete to authenticated
++  using (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
++
++-- reports: anyone signed in can file one; no select policy, so only admins
++-- (dashboard / service role) can read them.
++create table public.reports (
++  id uuid primary key default gen_random_uuid(),
++  reporter_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
++  post_id uuid references public.posts(id) on delete set null,
++  reported_user_id uuid references auth.users(id) on delete set null,
++  reason text not null check (char_length(reason) between 1 and 500),
++  created_at timestamptz default now()
++);
++alter table public.reports enable row level security;
++create policy "reports: insert own" on public.reports for insert to authenticated
++  with check (auth.uid() = reporter_id);
++
++-- blocks: each user manages only their own block list.
++create table public.blocks (
++  blocker_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
++  blocked_id uuid not null references auth.users(id) on delete cascade,
++  created_at timestamptz default now(),
++  primary key (blocker_id, blocked_id)
++);
++alter table public.blocks enable row level security;
++create policy "blocks: read own" on public.blocks for select to authenticated
++  using (auth.uid() = blocker_id);
++create policy "blocks: insert own" on public.blocks for insert to authenticated
++  with check (auth.uid() = blocker_id);
++create policy "blocks: delete own" on public.blocks for delete to authenticated
++  using (auth.uid() = blocker_id);
+diff --git a/tsconfig.tsbuildinfo b/tsconfig.tsbuildinfo
+index 67418b4..998daec 100644
+--- a/tsconfig.tsbuildinfo
++++ b/tsconfig.tsbuildinfo
+@@ -1 +1 @@
+-{"root":["./src/main.tsx","./src/vite-env.d.ts","./src/lib/openai.ts","./src/lib/supabase.ts","./src/pages/admin.tsx","./src/pages/coach.tsx","./src/pages/feed.tsx","./src/pages/landing.tsx","./src/pages/signup.tsx"],"version":"5.9.3"}
+\ No newline at end of file
++{"root":["./src/main.tsx","./src/vite-env.d.ts","./src/components/consentbanner.tsx","./src/components/footer.tsx","./src/lib/consent.ts","./src/lib/legal.ts","./src/lib/openai.ts","./src/lib/supabase.ts","./src/pages/account.tsx","./src/pages/admin.tsx","./src/pages/coach.tsx","./src/pages/dmca.tsx","./src/pages/feed.tsx","./src/pages/landing.tsx","./src/pages/privacy.tsx","./src/pages/privacychoices.tsx","./src/pages/signup.tsx","./src/pages/terms.tsx"],"version":"5.9.3"}
+\ No newline at end of file

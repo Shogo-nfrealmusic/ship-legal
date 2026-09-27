@@ -308,5 +308,7 @@ Human TODO includes whichever apply:
   in 2025, plus state-court suits; courts split on online-only businesses, and WCAG 2.1
   AA is the usual yardstick. Contrast here is only spot-checked.
 
+When you shorten or translate a line, keep its qualifiers ("Lovable disputes the CVE",
+"the plaintiffs' theory", "if CCPA applies to you", "if you offer it in the EU").
 Never state that the app "is illegal", "will be sued", or "is compliant". Say what the
 code does, what the rule is, and what the fix changes.

@@ -96,11 +96,41 @@ Requirements: bash and grep (macOS or Linux; on Windows, use WSL or Git Bash). T
 
 This is real output on `examples/lovable-vite-supabase`, a Lovable-style React + Vite + Supabase app built with seeded traps. The full runs are in [`examples/runs/`](examples/runs/).
 
-EXAMPLE_PLACEHOLDER
+```
+legal-check · lovable · vite-react + supabase (lovable)
+14 RISK (4 High) · 0 CHECK · 0 PASS · 10 N/A
+
+ ID  Risk    Check                               Where
+ S1  High    Secret keys exposed                 .env:3
+ S2  High    Database open to anyone             supabase/migrations/…_init.sql:1
+ S3  High    Admin area without auth             src/pages/Admin.tsx:8
+ P2  High    Ad pixels without consent           index.html:10
+ P5  Medium  Privacy policy & terms              (no /privacy, /terms)
+ P6  Medium  Account deletion & data export      (none)
+ ...
+ A1  Medium  Accessibility basics                src/index.css:4
+ P4  Low     Google Fonts from Google            index.html:8
+N/A    S4 Card data · S5 Hosted auth · P1 Replay · ...
+
+── S1 · High · Secret keys exposed
+Found: .env:3, src/lib/openai.ts:7 — OpenAI key behind VITE_ (shipped to browsers), .env committed
+...
+Apply the code fixes? (yes / no / only some IDs, e.g. "S1 S2 A1")
+```
+
+After `yes`, it edited 27 files. It moved the OpenAI call into a Supabase Edge Function, wrote an RLS migration (not applied), gated the Meta Pixel behind consent, and added the policy pages, account deletion, report/block, the AI disclosure, and the accessibility fixes. `npm run typecheck` and `npm run build` still pass. The applied diff is [`examples/runs/lovable-vite-supabase.fixes.patch`](examples/runs/lovable-vite-supabase.fixes.patch).
 
 ## Time and cost
 
-TIMECOST_PLACEHOLDER
+Measured on Claude Code 2.1.283 with Opus 5.5 as the main model. Details are in [`examples/runs/RUNS.md`](examples/runs/RUNS.md).
+
+| Step | Wall time | Cost at API list prices |
+|---|---|---|
+| Scan script alone | 0–14 s (up to 650 source files); 4 s on a generated 3,000-file tree | $0 |
+| Audit (turn 1) | 30–62 s | $0.51–0.71 |
+| Apply fixes (turn 2; 9–30 files) | 2.5–6 min | $1.26–2.13 |
+
+On a Pro or Max plan, runs count toward your usage limits with no separate charge. The audit doesn't use subagents: a parallel-subagent variant we measured was about 2× slower and 5× more expensive.
 
 ## Limitations
 

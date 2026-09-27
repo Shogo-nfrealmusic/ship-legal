@@ -7,7 +7,8 @@ started (password reset, receipt, login code, security notice): leave it.
 ## Done when
 - Every commercial email has a footer with a working unsubscribe link and a postal
   address placeholder `TODO(legal-check): postal address` read from config/env
-  (`COMPANY_POSTAL_ADDRESS`); never invent an address.
+  (`COMPANY_POSTAL_ADDRESS`); never invent an address. If it's missing in production,
+  sending throws instead of mailing the TODO text.
 - The unsubscribe link carries a signed token (HMAC of the email with a secret from env;
   constant-time compare), so nobody can unsubscribe someone else.
 - GET on the link only shows a confirm button (mail scanners open links); POST does the

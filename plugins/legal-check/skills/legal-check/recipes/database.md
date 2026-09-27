@@ -10,6 +10,11 @@ Goal: the public anon key / client SDK can only read and write what each user sh
   numbers → move them to a private table, or expose a view without them); inserts with
   `with check (auth.uid() = user_id)`. Storage buckets holding private files are
   `public = false` with storage policies; public buckets only for truly public media.
+- Write policies enforce the app's gates, not only ownership: if posting requires a
+  flag (e.g. `is_13_plus`, `banned = false`), the insert policy checks it
+  (`with check (auth.uid() = user_id and exists (select 1 from public.profiles p where
+  p.id = auth.uid() and p.is_13_plus))`). Update policies keep the owner column
+  unchanged (Firestore: `request.resource.data.uid == resource.data.uid`).
 - Admin-only data (all users' emails, orders) is read by a server function with the
   service role after checking an admin claim, never by the browser with the anon key.
 - Firebase: replace test-mode / `if true` rules with per-user rules, e.g.

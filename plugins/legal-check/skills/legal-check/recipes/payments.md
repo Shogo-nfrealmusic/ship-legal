@@ -13,7 +13,9 @@
   Replace your own card inputs with a hosted payment page or hosted fields (Stripe
   Checkout, Payment Links, or Stripe Elements / PaymentElement), delete card columns
   from the schema (write the migration, don't run it), stop storing CVC anywhere, and
-  flag existing stored card data for deletion (Human TODO — it's production data).
+  flag existing stored card data for deletion (Human TODO — it's production data). Say
+  plainly: stored CVCs must be deleted, never archived or backed up; full card numbers
+  should be deleted too, not kept "just in case".
 
 ## Stack notes
 - Next / Remix / Express / SvelteKit / Nuxt: server route creates a Stripe Checkout

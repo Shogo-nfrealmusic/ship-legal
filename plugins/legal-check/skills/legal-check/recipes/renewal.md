@@ -6,7 +6,8 @@ actively agree, and can cancel online by themselves.
 ## Done when
 - In visual proximity to every subscribe/upgrade button (same card, directly above or
   below, readable size and contrast): price and frequency ("$12 charged every month"),
-  that it continues until cancelled, how to cancel; trial: when it ends and what is
+  that it continues until cancelled, how to cancel (when a cancellation takes effect is a
+  billing setting you can't see: `TODO(legal-check)`); trial: when it ends and what is
   charged. Use the real price from the code; never guess (TODO if unknown).
 - An unchecked consent checkbox ("I agree to the automatic renewal terms above") must be
   ticked before the button works; if a server creates the checkout, it rejects requests

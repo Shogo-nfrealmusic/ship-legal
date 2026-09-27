@@ -79,7 +79,7 @@ assumption in one short clause.
 |---|---|---|---|---|
 | S1 | Secret keys exposed | High | never | a secret value is in source (`secrets`), a committed `.env` has secrets (`env_committed`), or a secret sits behind a public env prefix (`public_env_secret`). Public-by-design keys are fine: Supabase anon, Firebase web apiKey, Stripe `pk_`, PostHog project key |
 | S2 | Database open to anyone | High | no Supabase/Firebase/client-side database | `rls_off`, `firebase_rules`, `open_policy` on private data, or a `public_bucket` holding private files. Supabase with no SQL in the repo → CHECK |
-| S3 | Admin area without auth | High | no admin route/page | an admin route/page with `auth: none`, or an admin page reading all users' data with public keys |
+| S3 | Admin area without auth | High | no admin route/page | an admin route/page with `auth: none` AND no central guard covers it (read the `auth_guards` files: middleware, hooks, layouts, base controllers, before calling RISK); or an admin page reading all users' data with public keys; or a bulk-send/destructive API route anyone can call |
 | S4 | Card data on your server (PCI) | High | no payments | `card_fields` posted to your own server or stored |
 | S5 | Login rate limits & hashing | Medium | hosted auth (Supabase/Firebase/Clerk/Auth0) or no login | custom password auth with no `rate_limit`, or a fast hash (sha256/md5) for passwords |
 | P1 | Session replay (CIPA) | High | no replay tool | masking off, LogRocket without `inputSanitizer`, recording before consent, or not in the privacy policy |
@@ -99,7 +99,7 @@ assumption in one short clause.
 | C1 | User uploads (DMCA) | Medium | users can't post content others see | public user content and no DMCA page/route |
 | C2 | Report & block for user content | Medium (High if mobile) | no user content others see | public user content and no report/block |
 | C3 | Trademarks in name or claims | Low | no `brand_hits` | the app name contains another company's mark (Insta-, GPT, -Tok…) → RISK; brand names in claims → CHECK. "Sign in with Google" and similar are fine |
-| C4 | AI disclosure | Medium | no AI features | `persona_denial`; or an AI chat/persona users talk to with no `ai_disclosure`; or AI-written content shown as human |
+| C4 | AI disclosure | Medium (EU users) | no AI features | `persona_denial`; or an AI chat/persona users talk to with no `ai_disclosure`; or AI-written content shown as human |
 | A1 | Accessibility basics (ADA/WCAG) | Medium | no UI | any of `img_no_alt`, `input_no_label`, `click_no_keyboard`, `rn_unlabeled`, `outline_none`, `zoom_disabled`, `html_no_lang`, or clearly low-contrast text in CSS you read |
 
 ## 3. Report, then ask once
@@ -146,7 +146,15 @@ Apply the code fixes? (yes / no / only some IDs, e.g. "S1 S2 A1")
 
 Then stop and wait. Ask this once only.
 
+If there is no RISK, replace everything after the N/A line with: one line "Nothing to
+fix in code.", the Human TODO items that apply (CHECK items, lawyer review), and the
+disclaimer. No other sections, no suggestions about other tools.
+
 ## 4. Apply (only after the user agrees)
+
+**Never run `scan.sh` again in this step, not even `--recipe`: its pre-approval ended
+with the report, so it would stop on a permission prompt. Use the recipes you loaded in
+step 3.**
 
 - If the user says no: print the Human TODO list and the disclaimer, and stop.
 - **Stack first.** Use the scan's `stack`, `backend`, `builder`, `mobile` lines. For each
@@ -158,7 +166,16 @@ Then stop and wait. Ask this once only.
   be done in code, move it to Human TODO and say why.
 - Keep changes minimal and in the project's style. No refactors on the side.
 - Never invent real-world facts (address, company name, agent details, prices, alt text
-  you can't infer): use `TODO(legal-check): ...` placeholders.
+  you can't infer), and never describe settings you can't see (e.g. when a cancellation
+  takes effect, refund windows, retention periods): use `TODO(legal-check): ...`.
+- A placeholder must never go out to real users: code that sends or shows a required
+  value (postal address, agent contact, base URL) throws or refuses in production while
+  it's still missing, instead of sending the TODO text.
+- Only state what you verified in the code. In "Applied" and Human TODO, don't claim a
+  protection holds ("they can't post") unless the rule or check you wrote enforces it.
+- If a fix depends on authentication the app doesn't really have yet (a stub user, no
+  sessions), say in Human TODO that the new route stays unprotected until real auth
+  exists.
 - Dependencies and env vars: prefer none. When a fix needs one, add it to the manifest
   (package.json / requirements.txt / Gemfile) and `.env.example`, and say an install is
   needed. Don't run installs, migrations, deploys, `supabase`/`firebase` CLIs, or git
@@ -176,7 +193,8 @@ Then stop and wait. Ask this once only.
   If one fails because of your change, fix it. If it failed before, say so. If nothing
   could run, say why.
 
-Then print, in the user's language:
+Then print, in the user's language, exactly this block (code block, no extra
+sections):
 
 ```
 Applied
@@ -283,8 +301,8 @@ Human TODO includes whichever apply:
   intimate images within 48 hours of a valid request (TAKE IT DOWN Act).
 - **C3 Trademarks.** Using another company's trademark in your app name, icon, or
   metadata can bring Lanham Act claims and App Store rejection (Guideline 5.2.1).
-- **C4 AI disclosure.** Since 2 Aug 2026, the EU AI Act (Art. 50) requires telling users
-  they're talking to an AI unless it's obvious; California's bot law bans bots that
+- **C4 AI disclosure.** If you offer it in the EU: since 2 Aug 2026, the EU AI Act
+  (Art. 50) requires telling users they're talking to an AI unless it's obvious; California's bot law bans bots that
   deceive people to sell something or sway a vote.
 - **A1 Accessibility.** About 3,100 federal ADA website-accessibility lawsuits were filed
   in 2025, plus state-court suits; courts split on online-only businesses, and WCAG 2.1

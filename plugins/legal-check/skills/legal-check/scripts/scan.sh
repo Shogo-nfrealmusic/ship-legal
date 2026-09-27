@@ -78,26 +78,39 @@ case "$PAR" in ''|*[!0-9]*) PAR=4 ;; esac
 job_start() { J=$((J+1)); JF="$TMP/job.$J"; echo "@@JOB $J@@"; }
 job_throttle() { if [ $((J % PAR)) -eq 0 ]; then wait; fi; }
 
+# Redactor: runs on every evidence line before truncation, so no key can print a secret.
+# Line format: "file:line:snippet". Only the snippet is rewritten.
+REDACT_PL='
+  my $secret_name = qr/(secret|token|_pass\b|pass_?phrase|password["\x27`]?\s*[=:]|api[_-]?key|auth_?token|private[_-]?key|credential|service_role|twilio)/i;
+  if (/^(.*?:\d+:)(.*)$/s) {
+    my ($loc, $t) = ($1, $2);
+    # known key formats
+    $t =~ s/((?:sk_live_|rk_live_|sk_test_|sk-proj-|sk-ant-|sk-|AKIA|ghp_|github_pat_|xox[baprs]-|SG\.|AC(?=[0-9a-f]{32}))[A-Za-z0-9]{0,2})[A-Za-z0-9_.\-]{4,}/$1…(redacted)/g;
+    # .env files: the whole value, any form (export, =, :, quotes, spaces)
+    if ($loc =~ /(^|\/)\.env[^\/:]*:\d+:$/) { $t =~ s/^(\s*(?:export\s+)?[A-Za-z0-9_.]+\s*[=:]\s*["\x27]?)(.{0,3}).+$/$1$2…(redacted)/; }
+    # lines naming a secret: every quoted string of 8+ chars that is not a URL or ${...}
+    if ($t =~ $secret_name) {
+      $t =~ s/(["\x27`])((?!https?:|\$\{)[^"\x27`]{3})([^"\x27`]{5,})\1/$1$2…(redacted)$1/g;
+      $t =~ s/([=:]\s*)((?!https?:|\$\{|process\.|import\.|os\.|ENV|Deno)[^\s"\x27`;,(){}]{3})[^\s"\x27`;,(){}]{5,}/$1$2…(redacted)/g;
+    }
+    # any other long run that contains a digit (tokens, hashes), unless part of a URL/path
+    $t =~ s/(?<![:\/\w.])([A-Za-z0-9+_\-]{4})(?=[A-Za-z0-9+\/_.\-]*\d)[A-Za-z0-9+\/_.\-]{20,}/$1…(redacted)/g;
+    $_ = "$loc$t";
+  }
+  s/\s+/ /g; $_ .= "\n";'
+
 print_hits() {
-  key="$1"; f="$2"; redact="${3:-}"
+  key="$1"; f="$2"
   n="$(wc -l < "$f" | tr -d ' ')"
   if [ "$n" -eq 0 ]; then
     echo "$key: (none)"
     return
   fi
-  if [ -n "$redact" ]; then
-    # Never print secret values: known key prefixes, .env values, and long runs with digits.
-    if [ "$HAVE_PERL" -eq 1 ]; then
-      head -n "$MAX_HITS" "$f" | perl -pe '
-        s/((?:sk_live_|rk_live_|sk_test_|sk-proj-|sk-ant-|sk-|AKIA|ghp_|github_pat_|xox[baprs]-|SG\.)[A-Za-z0-9]{0,2})[A-Za-z0-9_.\-]{4,}/$1…(redacted)/g;
-        s/^([^:]*\.env[^:]*:\d+:\s*[A-Za-z0-9_]+\s*=\s*["\x27]?)(.{0,3})[^\s"\x27]+/$1$2…(redacted)/;
-        s/([A-Za-z0-9+\/_.\-]{4})(?=[A-Za-z0-9+\/_.\-]*\d)[A-Za-z0-9+\/_.\-]{16,}/$1…(redacted)/g;
-        s/\s+/ /g; $_ .= "\n"' | cut -c1-"$MAX_LEN" | sed "s|^|$key: |"
-    else
-      head -n "$MAX_HITS" "$f" | sed -E 's/[[:space:]]+/ /g; s/([=:"'"'"'`]|Bearer )([^=:"'"'"'` ]{4})[^"'"'"'` ,;]{6,}/\1\2…(redacted)/g' | cut -c1-"$MAX_LEN" | sed "s|^|$key: |"
-    fi
+  if [ "$HAVE_PERL" -eq 1 ]; then
+    head -n "$MAX_HITS" "$f" | perl -pe "$REDACT_PL" | cut -c1-"$MAX_LEN" | sed "s|^|$key: |"
   else
-    head -n "$MAX_HITS" "$f" | sed -E 's/[[:space:]]+/ /g' | cut -c1-"$MAX_LEN" | sed "s|^|$key: |"
+    # no perl: blunt fallback, drop everything after the first = or : in the snippet of lines naming secrets
+    head -n "$MAX_HITS" "$f" | sed -E 's/[[:space:]]+/ /g; s/^([^:]*:[0-9]+:)(.*([Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Kk][Ee][Yy]|[Pp][Aa][Ss][Ss]).*)$/\1 (line hidden: perl missing, may contain a secret)/' | cut -c1-"$MAX_LEN" | sed "s|^|$key: |"
   fi
   if [ "$n" -gt "$MAX_HITS" ]; then
     echo "$key: (+$((n - MAX_HITS)) more)"
@@ -132,7 +145,7 @@ perl_scan() {
   (
     if [ -s "$JF.list" ]; then
       # one perl process over all files, so END blocks see every file
-      xargs -0 perl -0777 -ne "$code" -- < "$JF.list" 2>/dev/null > "$JF.hits"
+      perl -e 'BEGIN { $/ = "\0"; @ARGV = map { s/\0\z//; $_ } <STDIN>; $/ = undef } '"while (<>) { $code }" < "$JF.list" 2>/dev/null > "$JF.hits"
     else
       : > "$JF.hits"
     fi
@@ -276,10 +289,10 @@ emit card_fields "name=${Q}(card[_-]?(number|num|no)|cc[_-]?(number|num|no)|cvc|
 
 # ---------------------------------------------------------------- security
 echo "== security =="
-SECRET_RE='sk_live_[A-Za-z0-9]{8,}|rk_live_[A-Za-z0-9]{8,}|sk_test_[A-Za-z0-9]{8,}|sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|pat[A-Za-z0-9]{10,}\.[A-Za-z0-9]{20,}|key-[0-9A-Za-z]{20,}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|service_role[^,;]*eyJ[A-Za-z0-9_-]{20,}'
+SECRET_RE='AC[0-9a-f]{32}|sk_live_[A-Za-z0-9]{8,}|rk_live_[A-Za-z0-9]{8,}|sk_test_[A-Za-z0-9]{8,}|sk-(proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|pat[A-Za-z0-9]{10,}\.[A-Za-z0-9]{20,}|key-[0-9A-Za-z]{20,}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|service_role[^,;]*eyJ[A-Za-z0-9_-]{20,}'
 grep_files "$CODE" "$SECRET_RE" ""
 grep -vE '\.env\.example:|(^|/)(tests?|__tests__|spec)/' "$TMP/hits" > "$TMP/h2" || true
-print_hits secrets "$TMP/h2" redact
+print_hits secrets "$TMP/h2"
 : > "$TMP/envtracked"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "git_repo: yes"
@@ -293,7 +306,7 @@ print_hits env_committed "$TMP/envtracked"
 PUB_RE='(NEXT_PUBLIC_|VITE_|EXPO_PUBLIC_|REACT_APP_|NUXT_PUBLIC_|PUBLIC_|GATSBY_)[A-Z0-9_]*(SECRET|SERVICE_ROLE|PRIVATE|OPENAI|ANTHROPIC|CLAUDE|GEMINI|GROQ|REPLICATE|MISTRAL|ELEVENLABS|STRIPE_SK|STRIPE_SECRET|RESEND|SENDGRID|TWILIO_(AUTH|TOKEN)|AIRTABLE|DATABASE_URL|DB_PASS)'
 { tr '\0' '\n' < "$CODE"; tr '\0' '\n' < "$ENVF"; } | tr '\n' '\0' > "$TMP/publist"
 grep_files "$TMP/publist" "$PUB_RE" ""
-print_hits public_env_secret "$TMP/hits" redact
+print_hits public_env_secret "$TMP/hits"
 # Supabase: tables created in SQL (any file) without RLS enabled (in any file)
 files_matching '\.sql$'
 cp "$TMP/sub" "$TMP/sql"
@@ -312,14 +325,18 @@ grep -E '(^|/)(firestore\.rules|storage\.rules|database\.rules\.json|[^/]*\.rule
 grep_files "$TMP/rules" 'if[[:space:]]+true|allow[[:space:]]+(read|write|read,[[:space:]]*write)[[:space:]]*;|request\.time[[:space:]]*<[[:space:]]*timestamp|"\.(read|write)"[[:space:]]*:[[:space:]]*(true|"true")'
 print_hits firebase_rules "$TMP/hits"
 # admin routes/pages, and whether the same file mentions any auth check
-AUTH_WORDS='auth|session|getUser|currentUser|current_user|requireAdmin|isAdmin|is_admin|role|login_required|staff_member_required|Depends\(|before_action|authorize|authenticate|clerk|protect|middleware|getServerSession|useUser|verify_token|jwt'
+AUTH_WORDS='\b(auth|authenticated?|authenticate_[a-z_]+|authorize[a-z_]*|session|getUser|currentUser|current_user|requireAdmin|require_admin|isAdmin|is_admin|login_required|staff_member_required|admin_required|Depends\(|before_action|clerk|getServerSession|useUser|verify_token|jwt|locals\.user|role[[:space:]]*(===?|==|!==?))\b'
 check_auth() { if grep -qiE "$AUTH_WORDS" "$1" 2>/dev/null; then echo found; else echo none; fi; }
 grep_files "$CODE" "@(app|router|bp|blueprint|api)\.(get|post|put|delete|route|patch)\(${Q}/(api/)?admin|router\.(get|post|put|delete|use)\(${Q}/(api/)?admin|app\.(get|post|put|delete|use)\(${Q}/(api/)?admin|path[[:space:]]*=[[:space:]]*${Q}/admin|path\(${Q}admin|namespace :admin|get ${Q}/admin" ""
 : > "$TMP/adm"; while IFS= read -r line; do f="${line%%:*}"; echo "$line [auth: $(check_auth "$f")]" >> "$TMP/adm"; done < "$TMP/hits"
 print_hits admin_route "$TMP/adm"
-grep -iE '(^|/)(pages|app|routes|src/routes|src/pages|views|templates|screens)/(.*/)?\(?admin\)?(/|\.|$)|(^|/)[Aa]dmin[A-Za-z]*\.(tsx|jsx|vue|svelte|astro|html)$' "$ALL" > "$TMP/ap" || true
+grep -iE '(^|/)(pages|app|routes|src/routes|src/pages|views|templates|screens)/(.*/)?\(?admin\)?(/|\.|$)|(^|/)[Aa]dmin[A-Za-z]*\.(tsx|jsx|vue|svelte|astro|html)$|(^|/)server/api/admin[^/]*\.(ts|js)$|(^|/)server/api/admin/' "$ALL" > "$TMP/ap" || true
 : > "$TMP/adm"; while IFS= read -r f; do echo "$f [auth: $(check_auth "$f")]" >> "$TMP/adm"; done < "$TMP/ap"
 print_hits admin_page "$TMP/adm"
+# files that may protect routes centrally: read them before calling an admin route unprotected
+grep -iE '(^|/)(middleware\.(ts|js)|hooks\.server\.(ts|js)|application_controller\.rb|admin_controller\.rb|base_controller\.rb|server/middleware/[^/]+\.(ts|js)|(\+|_)?layout(\.server)?\.(tsx|jsx|ts|js|svelte|vue)|settings\.py|dependencies\.py|deps\.py|auth\.(ts|js|py))$' "$ALL" | tr '\n' '\0' > "$TMP/guards"
+grep_files "$TMP/guards" "$AUTH_WORDS" -i
+print_hits auth_guards "$TMP/hits"
 emit auth_custom 'bcrypt|argon2|scrypt|password_hash|check_password|verify_password|hashlib\.(sha256|md5|sha1)\([^)]*(pw|pass)|compare\([^)]*password|signInWithPassword|passport-local|authenticate\('
 emit rate_limit 'rate.?limit|ratelimit|express-rate-limit|@upstash/ratelimit|rate-limiter-flexible|slowapi|flask[-_]limiter|django[-_]ratelimit|rack[-_]attack|throttle|@nestjs/throttler|limiter\.'
 
@@ -328,10 +345,10 @@ echo "== a11y =="
 files_matching '\.(html?|jsx|tsx|vue|svelte|astro|erb|ejs|hbs|jinja2?|j2|njk|twig|liquid|php)$'
 cp "$TMP/sub" "$TMP/markup"
 perl_scan img_no_alt '
-  while (/<img\b((?:[^>{}]|\{[^{}]*\})*)>/gs) { my ($a,$p)=($1,$-[0]); next if $a =~ /\balt\s*=|\{\s*\.\.\./; my $l=(substr($_,0,$p)=~tr/\n//)+1; (my $x=substr($&,0,90))=~s/\s+/ /g; print "$ARGV:$l: $x\n" }' "$TMP/markup"
+  while (/<img\b((?:<%.*?%>|[^>{}]|\{[^{}]*\})*)>/gs) { my ($a,$p)=($1,$-[0]); next if $a =~ /\balt\s*=|\{\s*\.\.\./; my $l=(substr($_,0,$p)=~tr/\n//)+1; (my $x=substr($&,0,90))=~s/\s+/ /g; print "$ARGV:$l: $x\n" }' "$TMP/markup"
 perl_scan input_no_label '
   my $s=$_; my %for; $for{$1}=1 while $s =~ /(?:\bfor|htmlFor)\s*=\s*\{?\s*["\x27]([\w-]+)/g;
-  while ($s =~ /<(input|textarea|select)\b((?:[^>{}]|\{[^{}]*\})*)>/gs) { my ($t,$a,$p)=($1,$2,$-[0]);
+  while ($s =~ /<(input|textarea|select)\b((?:<%.*?%>|[^>{}]|\{[^{}]*\})*)>/gs) { my ($t,$a,$p)=($1,$2,$-[0]);
     next if $a =~ /type\s*=\s*\{?\s*["\x27](hidden|submit|button|reset|image)\b/i; next if $a =~ /aria-label|aria-labelledby|\{\s*\.\.\./i;
     if ($a =~ /\bid\s*=\s*\{?\s*["\x27]([\w-]+)/ && $for{$1}) { next }
     my $before=substr($s,0,$p); my $lo=rindex($before,"<label"); my $lc=rindex($before,"</label"); next if $lo>=0 && $lo>$lc;

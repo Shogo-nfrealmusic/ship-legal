@@ -35,9 +35,14 @@ Fix for every commercial email:
    export const unsubscribeUrl = (appUrl: string, email: string) =>
      `${appUrl}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${unsubscribeToken(email)}`;
    ```
-3. Handler route: GET shows/does the unsubscribe; POST supports one-click
-   (`List-Unsubscribe-Post`). Both mark the address as unsubscribed in the app's store,
-   no login required.
+3. Handler route, no login required:
+   - GET verifies the token and shows a small page with an "Unsubscribe" button that
+     POSTs back to the same URL. GET must not change anything: email security scanners
+     open links automatically and would unsubscribe people.
+   - POST verifies the token and marks the address as unsubscribed. The same POST serves
+     one-click unsubscribe from mail apps (`List-Unsubscribe-Post`, RFC 8058).
+   - Build the link from the app's public URL. If that env var is missing in production,
+     throw instead of falling back to localhost (a dead link breaks the opt-out).
 4. Sending code: skip unsubscribed addresses, and add headers
    `List-Unsubscribe: <https://.../api/unsubscribe?...>` and
    `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (Resend: `headers: {...}`).

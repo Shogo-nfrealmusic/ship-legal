@@ -6,8 +6,9 @@ on the site. Code can do the second part only.
 
 1. Page at `/dmca` (or `/copyright`) with:
    - how to send a takedown notice (identify the work, the infringing URL, contact
-     details, a good-faith statement, a statement under penalty of perjury that the
-     notice is accurate and the sender is authorized, and a signature);
+     details, a good-faith statement, a statement that the notice is accurate and,
+     under penalty of perjury, that the sender is authorized to act for the owner,
+     and a signature);
    - the designated agent: name, postal address, phone, email — as clearly marked
      placeholders (`TODO(legal-check): must match your Copyright Office registration`);
    - how to send a counter-notice;

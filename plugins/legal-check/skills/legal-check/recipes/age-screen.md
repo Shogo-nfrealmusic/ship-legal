@@ -13,6 +13,8 @@ Do:
   Show a neutral message ("Sorry, we can't create an account for you right now.").
 - Set a short-lived cookie (e.g. 24 h) so the form cannot simply be resubmitted
   with an older year right away.
+- Month and year are enough for a screen, but someone who turns 13 later in the current
+  month gets through. Ask for the day too if the project needs it exact.
 - Store only what you need afterwards, e.g. `ageVerified13Plus: true`, not the birth date.
 - OAuth-only sign-up (Google, GitHub...): put the same screen before the OAuth redirect,
   and check the cookie in the OAuth callback before creating the user.

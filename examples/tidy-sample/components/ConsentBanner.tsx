@@ -1,25 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { denyConsent, grantConsent, initAnalytics } from "@/lib/analytics";
+import { denyConsent, grantConsent } from "@/lib/analytics";
 
 export function ConsentBanner() {
-  const [choice, setChoice] = useState<string | null>("pending");
+  // undefined = not read yet, null = no choice yet, "yes" / "no" = decided
+  const [choice, setChoice] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    initAnalytics();
-    const saved = localStorage.getItem("consent");
+    let saved: string | null = null;
+    try { saved = localStorage.getItem("consent"); } catch {}
     setChoice(saved);
     if (saved === "yes") grantConsent();
   }, []);
 
-  if (choice === "yes" || choice === "no" || choice === "pending") return null;
+  if (choice !== null) return null;
+
+  function decide(value: "yes" | "no") {
+    try { localStorage.setItem("consent", value); } catch {}
+    if (value === "yes") grantConsent(); else denyConsent();
+    setChoice(value);
+  }
 
   return (
     <div role="dialog" aria-label="Cookie consent">
       We use PostHog analytics, including session recordings with typed text masked, to improve Tidy Notes.
-      <button onClick={() => { localStorage.setItem("consent", "yes"); grantConsent(); setChoice("yes"); }}>Accept</button>
-      <button onClick={() => { localStorage.setItem("consent", "no"); denyConsent(); setChoice("no"); }}>Decline</button>
+      <button onClick={() => decide("yes")}>Accept</button>
+      <button onClick={() => decide("no")}>Decline</button>
     </div>
   );
 }

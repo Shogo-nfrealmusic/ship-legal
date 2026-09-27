@@ -13,6 +13,14 @@ You audit the project for eight common legal traps, report them compactly, and, 
 after the user says yes, fix what code can fix. You are not a lawyer and never
 present the result as legal advice.
 
+**Tool rules (the run is screen-recorded; stray permission prompts ruin it):**
+- Read files with the Read tool, several in parallel in one message. Never `cat`,
+  `head`, `ls`, or `grep` through Bash.
+- Search with the Grep and Glob tools.
+- The only Bash commands before the user agrees are the two `scan.sh` commands below.
+- After the user agrees: Bash only for the project's own check scripts, one plain
+  command each (`npm run typecheck`), no pipes, `&&`, or `;`.
+
 The user's request:
 
 <request>
@@ -21,10 +29,14 @@ $ARGUMENTS
 
 ## 0. Set up
 
-- **Target.** If the first word of the request is an existing directory, that is the
-  target and the rest is the focus. Otherwise the target is the current directory and
-  the whole request is the focus. A focus ("email", "fonts", "subscriptions") means:
-  report only the matching checks. No focus means all eight.
+- **Target.** If the request starts with an existing directory (possibly in quotes),
+  that is the target and the rest is the focus. Otherwise the target is the current
+  directory and the whole request is the focus.
+- **Focus.** A focus word limits the report to matching checks, in any language:
+  kids/age/COPPA/年齢/子ども → 1; fonts/フォント → 2; replay/recording/録画 → 3;
+  email/mail/メール → 4; subscription/billing/Stripe/サブスク/課金 → 5;
+  uploads/DMCA/著作権 → 6; privacy/terms/規約/プライバシー → 7; cookies/consent/同意 → 8.
+  A question with no such word ("is my app OK?", 「大丈夫？」) means all eight.
 - **Language.** Write everything in the language the user wrote the request in
   (Japanese request → Japanese report). If the request is empty or only a path, use
   the language of the conversation so far, else English. Keep the status words
@@ -45,9 +57,9 @@ The scan only finds candidates. You decide the status.
 
 Read only the files the scan points at, plus what you need to decide a rule below
 (for example the email template a send call uses, or the page that renders an upload).
-Do not read node_modules, build output, or lockfiles. Do not re-grep the whole project
-for things the scan already covers. Be quick: use the Read tool (not `cat` in Bash),
-and issue the reads in parallel in one message.
+Do not read node_modules, build output, or lockfiles. Do not re-search the whole project
+for things the scan already covers. Be quick: issue the reads in parallel in one message.
+Also read the README or landing page once to judge who the app is for (check 1).
 
 Apply these rules. When the evidence is ambiguous, pick the status the code supports
 and say what you assumed in one short clause. Never invent a problem the code doesn't
@@ -55,12 +67,12 @@ show: a clean project must come back all PASS / N/A.
 
 | # | Check | N/A when | PASS when | RISK when |
 |---|---|---|---|---|
-| 1 | Kids under 13 (COPPA) | no accounts and no personal data collected | sign-up has a neutral age screen that blocks under-13s without storing their data | sign-up collects personal data with no age screen, or the screen hints the answer, or it stores under-13 data; always RISK if the app looks directed to children |
+| 1 | Kids under 13 (COPPA) | no sign-up and no email capture | a neutral age screen blocks under-13s without storing their data; or a business/developer tool with no age screen (add "optional: neutral age screen" to its row) | the app looks directed to children; or it is a consumer social app (public profiles, posting, messaging) with no age screen; or the screen hints the answer or stores under-13 data |
 | 2 | Google Fonts CDN (GDPR, EU) | no web fonts | fonts are self-hosted (`next/font/google`, `next/font/local`, `@fontsource`, local `@font-face`) | any `fonts.googleapis.com` / `fonts.gstatic.com` loaded by pages |
 | 3 | Session replay (CIPA) | no session replay tool | masking on, recording starts only after consent, and the privacy policy discloses it | masking turned off, LogRocket without `inputSanitizer`, recording before consent, or no disclosure |
 | 4 | Marketing email (CAN-SPAM) | no email, or only transactional email (reset, receipt, login code) | every commercial email has a working unsubscribe and a postal address | a commercial email lacks either |
 | 5 | Subscriptions (CA auto-renewal) | no recurring billing | terms next to the button, affirmative consent, online cancel | any of the three is missing |
-| 6 | User uploads (DMCA) | users cannot post content others can see | a DMCA/copyright page with agent contact info exists and is linked | public user content and no DMCA page |
+| 6 | User uploads (DMCA) | users cannot post content others can see (`upload` and `ugc` evidence both private or absent) | a DMCA/copyright page with agent contact info exists and is linked | public user content (files, or posts/comments others can see) and no DMCA page |
 | 7 | Privacy policy & terms | the site collects no personal data at all | both pages exist and are linked from the site | either is missing or not linked |
 | 8 | Analytics consent | no analytics, or only cookieless analytics (Plausible, Fathom, Umami, Vercel Web Analytics) | tracking/replay loads only after consent | trackers load with no consent step |
 
@@ -113,13 +125,12 @@ Then stop and wait. Ask this question once only.
 - Do not add a dependency or env var unless the recipe needs it; when you do, say so.
   Do not run package installs, migrations, git commits, or deploys yourself.
 - When done, verify:
-  1. Use the Grep tool (not Bash, and not scan.sh, which now needs a permission prompt)
-     to confirm what the fix removes or adds (for example no `fonts.googleapis.com`,
-     an unsubscribe link in each commercial template).
+  1. Use the Grep tool (not Bash, and not scan.sh) to confirm what the fix removes or
+     adds (for example no `fonts.googleapis.com`, an unsubscribe link in each
+     commercial template).
   2. If `node_modules` exists, run the project's own `typecheck`, `lint`, and `build`
-     scripts that exist in package.json, each as its own plain command with no pipes
-     or `&&` (for example `npm run typecheck`, then `npm run build`), so the user can
-     approve each one.
+     scripts that exist in package.json, each as its own plain command (for example
+     `npm run typecheck`, then `npm run build`; use the project's package manager).
      Report each result honestly. If one fails because of your change, fix it; if it
      failed before your change, say so. If there is no `node_modules`, say the checks
      were not run and why.
@@ -146,6 +157,7 @@ Human TODO always includes the items that apply among:
 - Register a DMCA designated agent at dmca.copyright.gov ($6, renew every 3 years) and
   copy the same details into the /dmca page.
 - Turn on cancellation in the Stripe Customer Portal settings.
+- Keep the price written in the renewal terms in sync with the real price in Stripe.
 - Check the session replay tool's masking settings in its dashboard.
 - Decide whether the app is directed to children; if yes, talk to a lawyer about
   verifiable parental consent before launch.
@@ -155,8 +167,10 @@ Human TODO always includes the items that apply among:
 
 1. **COPPA.** Applies if the service is directed to children under 13, or if you have
    actual knowledge that a user is under 13. Civil penalty up to $53,088 per violation
-   (2025 level). A general-audience site is not required to investigate ages; a neutral
-   age screen keeps you from collecting data from users you'd then know are under 13.
+   (2025 level). A general-audience site is not required to investigate ages. For a
+   consumer social app, kids do show up, and a neutral age screen keeps you from
+   collecting data from users you'd then know are under 13. Say both halves: it is not
+   required, and why it is still worth it here.
 2. **Google Fonts.** A German court (LG München I, 20 Jan 2022, 3 O 17493/20) awarded
    one visitor €100 because the site sent his IP address to Google by loading Google
    Fonts from Google's servers (GDPR, EU). It matters if you have EU visitors.
@@ -167,8 +181,9 @@ Human TODO always includes the items that apply among:
    PostHog and Clarity mask inputs by default; LogRocket records non-password inputs
    by default.
 4. **CAN-SPAM** (15 U.S.C. §7704). Commercial email needs a working opt-out and a valid
-   physical postal address. Penalties up to $53,088 per email. Transactional email
-   (password reset, receipts) is not covered by these two rules.
+   physical postal address, among other requirements. Penalties up to $53,088 per
+   email. Transactional email (password reset, receipts) is not covered by these two
+   rules.
 5. **California Automatic Renewal Law** (Bus. & Prof. Code §17602, as amended by
    AB 2863 for contracts from 1 July 2025). Clear and conspicuous renewal terms in
    visual proximity to the subscribe button, affirmative consent, and easy online
@@ -182,8 +197,8 @@ Human TODO always includes the items that apply among:
    conspicuously. Terms are not legally required but define the rules for user content
    and subscriptions.
 8. **Analytics consent.** In the EU/UK, non-essential cookies and trackers need prior
-   consent. Most US states do not require a cookie banner, but consent is what makes
-   session recording defensible (check 3).
+   consent. Most US states do not require a cookie banner, but consent is the main
+   defense against wiretap claims over session recording (check 3).
 
 Never state that the app "is illegal", "will be sued", or "is compliant". Say what the
 code does, what the rule is, and what the fix changes.

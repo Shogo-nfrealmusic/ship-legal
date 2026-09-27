@@ -14,15 +14,21 @@ privacy policy says recordings happen.
    - Sentry Replay, Hotjar, FullStory, Mouseflow, others: do not claim their defaults.
      Remove any option in the code that turns masking off, and add a Human TODO to
      confirm the tool's masking settings in its dashboard.
-2. Consent gate: start recording only after an explicit "Accept".
+2. Consent gate: load the tool only after an explicit "Accept". Do not call its init
+   on page load with an "opted out" flag: PostHog's `opt_out_capturing_by_default` stops
+   capture but still sets its cookie before consent.
    - PostHog:
      ```ts
-     posthog.init(KEY, { api_host: HOST, opt_out_capturing_by_default: true, disable_session_recording: true });
-     // on Accept:
-     posthog.opt_in_capturing(); posthog.startSessionRecording();
-     // on Decline:
-     posthog.opt_out_capturing();
+     // lib/analytics.ts
+     let started = false;
+     export function acceptTracking() {          // call on Accept, and on load if consent was saved
+       if (started) return; started = true;
+       posthog.init(KEY, { api_host: HOST, person_profiles: "identified_only" }); // default input masking
+     }
+     export function declineTracking() { if (started) posthog.opt_out_capturing(); }
      ```
+     Keep `<PostHogProvider client={posthog}>` if the app uses the React hooks; calls
+     made before init are ignored.
    - Script-tag tools (Clarity, Hotjar, LogRocket, FullStory...): do not load or init the
      tool until consent is given.
    - If there is no consent UI yet, add a small banner component (see below).
